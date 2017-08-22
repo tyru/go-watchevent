@@ -33,12 +33,6 @@ func (dir *Directories) Set(value string) error {
 }
 
 func Main() int {
-	if len(os.Args) == 1 {
-		// TODO: -help
-		log.Println("Usage: go run " + filepath.Base(os.Args[0]) + ".go dir OPTIONS")
-		return 1
-	}
-
 	// Parse args
 	var configFile string
 	flag.StringVar(&configFile, "config", "", "config file")
@@ -48,40 +42,47 @@ func Main() int {
 	flag.Var(&directories, "d", "directory to be watched")
 	flag.Parse()
 
-	// Load config
 	if configFile == "" {
-		fmt.Fprintln(os.Stderr, "-config option was not specified")
+		fmt.Fprintln(os.Stderr, "[error] -config option is required")
+		flag.Usage()
 		return 2
 	}
+	if len(directories) == 0 {
+		fmt.Fprintln(os.Stderr, "[error] one -d option is required at least")
+		flag.Usage()
+		return 3
+	}
+
+	// Load config
 	_, err := loadConfig(configFile)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, configFile, ": Could not load config file")
-		return 3
+		fmt.Fprintln(os.Stderr, "[error]", configFile, ": Could not load config file")
+		return 4
 	}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Could not initialize watcher")
-		return 4
+		fmt.Fprintln(os.Stderr, "[error] Could not initialize watcher")
+		return 5
 	}
 	defer watcher.Close()
 
-	// Run worker
+	// Run watcher
 	done := make(chan int)
 	go poll(watcher, done)
 
 	// Watch the specified directory
 	for _, dir := range directories {
 		if file, err := os.Stat(dir); err != nil || !file.IsDir() {
-			fmt.Fprintln(os.Stderr, dir, ": given string does not exist or not a directory")
-			return 5
+			fmt.Fprintln(os.Stderr, "[error]", dir, ": given path does not exist or not a directory")
+			return 6
 		}
 	}
 	for _, dir := range directories {
 		err := watchDirsUnder(dir, watcher)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, dir, ": Could not watch directory")
-			return 6
+			fmt.Fprintln(os.Stderr, "[error]", dir, ": Could not watch directory")
+			return 7
 		}
 	}
 
