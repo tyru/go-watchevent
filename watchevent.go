@@ -28,6 +28,7 @@ func Main() int {
 		return 1
 	}
 
+	// Parse args
 	var configFile string
 	flag.StringVar(&configFile, "config", "", "config file")
 	flag.StringVar(&configFile, "c", "", "config file")
@@ -36,6 +37,7 @@ func Main() int {
 	var directories = sliceflag.String(flag.CommandLine, "d", []string{}, "directory to be watched")
 	flag.Parse()
 
+	// Load config
 	if configFile == "" {
 		fmt.Fprintln(os.Stderr, "-config option was not specified")
 		return 2
@@ -45,7 +47,6 @@ func Main() int {
 		fmt.Fprintln(os.Stderr, configFile, ": Could not load config file")
 		return 3
 	}
-	fmt.Println("[DEBUG] Config:", config)
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -60,7 +61,6 @@ func Main() int {
 
 	// Watch the specified directory
 	for _, dir := range *directories {
-		fmt.Println("[DEBUG] Dir: ", dir)
 		if file, err := os.Stat(dir); err != nil || !file.IsDir() {
 			fmt.Fprintln(os.Stderr, dir, ": given string does not exist or not a directory")
 			return 5
