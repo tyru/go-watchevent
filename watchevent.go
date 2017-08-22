@@ -8,17 +8,28 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v2"
 
 	"github.com/go-fsnotify/fsnotify"
-	"github.com/soh335/sliceflag"
 )
 
 var version = "x.y.z"
 
 func main() {
 	os.Exit(Main())
+}
+
+type Directories []string
+
+func (dir *Directories) String() string {
+	return strings.Join(([]string)(*dir), ",")
+}
+
+func (dir *Directories) Set(value string) error {
+	*dir = append(*dir, value)
+	return nil
 }
 
 func Main() int {
@@ -32,9 +43,9 @@ func Main() int {
 	var configFile string
 	flag.StringVar(&configFile, "config", "", "config file")
 	flag.StringVar(&configFile, "c", "", "config file")
-	// TODO
-	// var directories = sliceflag.String(flag.CommandLine, "directory", []string{}, "directory to be watched")
-	var directories = sliceflag.String(flag.CommandLine, "d", []string{}, "directory to be watched")
+	var directories Directories
+	flag.Var(&directories, "directory", "directory to be watched")
+	flag.Var(&directories, "d", "directory to be watched")
 	flag.Parse()
 
 	// Load config
@@ -42,7 +53,7 @@ func Main() int {
 		fmt.Fprintln(os.Stderr, "-config option was not specified")
 		return 2
 	}
-	config, err := loadConfig(configFile)
+	_, err := loadConfig(configFile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, configFile, ": Could not load config file")
 		return 3
@@ -60,13 +71,13 @@ func Main() int {
 	go poll(watcher, done)
 
 	// Watch the specified directory
-	for _, dir := range *directories {
+	for _, dir := range directories {
 		if file, err := os.Stat(dir); err != nil || !file.IsDir() {
 			fmt.Fprintln(os.Stderr, dir, ": given string does not exist or not a directory")
 			return 5
 		}
 	}
-	for _, dir := range *directories {
+	for _, dir := range directories {
 		err := watchDirsUnder(dir, watcher)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, dir, ": Could not watch directory")
