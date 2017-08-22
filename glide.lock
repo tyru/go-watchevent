@@ -1,10 +1,14 @@
-hash: fd635c9c54ae7f7bda9831ee3b8f6679f8d5afd0e8812fc376d7600c530687d1
-updated: 2017-08-22T22:24:38.1468034+09:00
+hash: 51a6f877d7c23a2de83fbc630deb5001bac8e8b8363980c9711e9090e0de3d4c
+updated: 2017-08-23T01:37:53.2119399+09:00
 imports:
 - name: github.com/go-fsnotify/fsnotify
   version: 629574ca2a5df945712d3079857300b5e4da0236
+- name: github.com/soh335/sliceflag
+  version: d2d28a5acab8b2ad159a74b65288bf1218e43340
 - name: golang.org/x/sys
   version: 07c182904dbd53199946ba614a412c61d3c548f5
   subpackages:
   - unix
+- name: gopkg.in/yaml.v2
+  version: eb3733d160e74a9c7e442f435eb3bea458e1d19f
 testImports: []
