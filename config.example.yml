@@ -1,0 +1,7 @@
+on_create: post-libresonic-rescan
+on_remove: post-libresonic-rescan
+
+action:
+  - name: post-libresonic-rescan
+    sleep: 1s
+    run: curl localhost
