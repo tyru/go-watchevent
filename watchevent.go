@@ -23,7 +23,8 @@ func main() {
 
 func Main() int {
 	if len(os.Args) == 1 {
-		log.Println("Usage: go run " + filepath.Base(os.Args[0]) + ".go dir [dir2 ...]")
+		// TODO: -help
+		log.Println("Usage: go run " + filepath.Base(os.Args[0]) + ".go dir OPTIONS")
 		return 1
 	}
 
