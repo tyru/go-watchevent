@@ -201,7 +201,7 @@ func lookupAction(actionName string, config *Config) *Action {
 	return nil
 }
 
-func invokeAction(actionName string, config *Config, done chan int) {
+func invokeAction(actionName string, config *Config, event *fsnotify.Event, done chan int) {
 	action := lookupAction(actionName, config)
 	if action == nil {
 		log.Println(actionName + ": Can't look up action")
@@ -209,11 +209,17 @@ func invokeAction(actionName string, config *Config, done chan int) {
 		return
 	}
 	// Sleep
+	log.Println("Sleeping", action.Sleep, "...")
 	msec := mustParseSleepMSec(action.Sleep)
 	time.Sleep(time.Duration(msec) * time.Millisecond)
 	// Action
-	cmd := config.Shell[0]
-	err := exec.Command(cmd, append(config.Shell[1:], action.Run)...).Run()
+	log.Println("Executing", action.Run, "...")
+	exe := config.Shell[0]
+	cmd := exec.Command(exe, append(config.Shell[1:], action.Run)...)
+	cmd.Env = append(os.Environ(),
+		"WEV_EVENT="+event.Op.String(),
+		"WEV_PATH="+event.Name)
+	err := cmd.Run()
 	if err != nil {
 		log.Println(err)
 		done <- 21
@@ -255,7 +261,7 @@ func poll(watcher *fsnotify.Watcher, config *Config, done chan int) {
 			case event.Op&fsnotify.Write == fsnotify.Write:
 				log.Println("Modified file: ", event.Name)
 				if config.OnWrite != "" {
-					go invokeAction(config.OnWrite, config, done)
+					go invokeAction(config.OnWrite, config, &event, done)
 				}
 			case event.Op&fsnotify.Create == fsnotify.Create:
 				log.Println("Created file: ", event.Name)
@@ -269,22 +275,22 @@ func poll(watcher *fsnotify.Watcher, config *Config, done chan int) {
 					log.Println("Watched: ", event.Name)
 				}
 				if config.OnCreate != "" {
-					go invokeAction(config.OnCreate, config, done)
+					go invokeAction(config.OnCreate, config, &event, done)
 				}
 			case event.Op&fsnotify.Remove == fsnotify.Remove:
 				log.Println("Removed file: ", event.Name)
 				if config.OnRemove != "" {
-					go invokeAction(config.OnRemove, config, done)
+					go invokeAction(config.OnRemove, config, &event, done)
 				}
 			case event.Op&fsnotify.Rename == fsnotify.Rename:
 				log.Println("Renamed file: ", event.Name)
 				if config.OnRename != "" {
-					go invokeAction(config.OnRename, config, done)
+					go invokeAction(config.OnRename, config, &event, done)
 				}
 			case event.Op&fsnotify.Chmod == fsnotify.Chmod:
 				log.Println("File changed permission: ", event.Name)
 				if config.OnChmod != "" {
-					go invokeAction(config.OnChmod, config, done)
+					go invokeAction(config.OnChmod, config, &event, done)
 				}
 			}
 

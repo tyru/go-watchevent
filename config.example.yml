@@ -4,4 +4,4 @@ on_remove: post-libresonic-rescan
 action:
   - name: post-libresonic-rescan
     sleep: 5s
-    run: date >>date.txt
+    run: echo $(date) $WEV_EVENT $WEV_PATH >>date.txt
