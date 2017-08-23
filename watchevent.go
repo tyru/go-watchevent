@@ -290,50 +290,55 @@ func poll(watcher *fsnotify.Watcher, config *Config, done chan int) {
 		select {
 		case event := <-watcher.Events:
 			log.Println("event: ", event)
-			// Do not block when sending to channel
-			select {
-			case newEvent <- true:
-			}
-			switch {
-			case event.Op&fsnotify.Write == fsnotify.Write:
-				log.Println("Modified file: ", event.Name)
-				if config.OnWrite != "" {
-					go invokeAction(config.OnWrite, config, &event, newEvent, done)
-				}
-			case event.Op&fsnotify.Create == fsnotify.Create:
-				log.Println("Created file: ", event.Name)
-				// Watch a new directory
-				if file, err := os.Stat(event.Name); err == nil && file.IsDir() {
-					err = watcher.Add(event.Name)
-					if err != nil {
-						log.Fatal(err)
-						done <- 10
-					}
-					log.Println("Watched: ", event.Name)
-				}
-				if config.OnCreate != "" {
-					go invokeAction(config.OnCreate, config, &event, newEvent, done)
-				}
-			case event.Op&fsnotify.Remove == fsnotify.Remove:
-				log.Println("Removed file: ", event.Name)
-				if config.OnRemove != "" {
-					go invokeAction(config.OnRemove, config, &event, newEvent, done)
-				}
-			case event.Op&fsnotify.Rename == fsnotify.Rename:
-				log.Println("Renamed file: ", event.Name)
-				if config.OnRename != "" {
-					go invokeAction(config.OnRename, config, &event, newEvent, done)
-				}
-			case event.Op&fsnotify.Chmod == fsnotify.Chmod:
-				log.Println("File changed permission: ", event.Name)
-				if config.OnChmod != "" {
-					go invokeAction(config.OnChmod, config, &event, newEvent, done)
-				}
-			}
+			fireEvent(&event, newEvent, watcher, config, done)
 
 		case err := <-watcher.Errors:
 			log.Println("error: ", err)
 			done <- 11
+		}
+	}
+}
+
+func fireEvent(event *fsnotify.Event, newEvent chan bool, watcher *fsnotify.Watcher, config *Config, done chan int) {
+	// Do not block when sending to channel
+	select {
+	case newEvent <- true:
+	}
+
+	switch {
+	case event.Op&fsnotify.Write == fsnotify.Write:
+		log.Println("Modified file: ", event.Name)
+		if config.OnWrite != "" {
+			go invokeAction(config.OnWrite, config, event, newEvent, done)
+		}
+	case event.Op&fsnotify.Create == fsnotify.Create:
+		log.Println("Created file: ", event.Name)
+		// Watch a new directory
+		if file, err := os.Stat(event.Name); err == nil && file.IsDir() {
+			err = watcher.Add(event.Name)
+			if err != nil {
+				log.Fatal(err)
+				done <- 10
+			}
+			log.Println("Watched: ", event.Name)
+		}
+		if config.OnCreate != "" {
+			go invokeAction(config.OnCreate, config, event, newEvent, done)
+		}
+	case event.Op&fsnotify.Remove == fsnotify.Remove:
+		log.Println("Removed file: ", event.Name)
+		if config.OnRemove != "" {
+			go invokeAction(config.OnRemove, config, event, newEvent, done)
+		}
+	case event.Op&fsnotify.Rename == fsnotify.Rename:
+		log.Println("Renamed file: ", event.Name)
+		if config.OnRename != "" {
+			go invokeAction(config.OnRename, config, event, newEvent, done)
+		}
+	case event.Op&fsnotify.Chmod == fsnotify.Chmod:
+		log.Println("File changed permission: ", event.Name)
+		if config.OnChmod != "" {
+			go invokeAction(config.OnChmod, config, event, newEvent, done)
 		}
 	}
 }
