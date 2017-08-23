@@ -3,5 +3,5 @@ on_remove: post-libresonic-rescan
 
 action:
   - name: post-libresonic-rescan
-    sleep: 1s
-    run: curl localhost
+    sleep: 5s
+    run: date >>date.txt

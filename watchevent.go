@@ -7,8 +7,13 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v2"
 
@@ -54,34 +59,34 @@ func Main() int {
 	}
 
 	// Load config
-	_, err := loadConfig(configFile)
+	config, err := loadConfig(configFile)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "[error]", configFile, ": Could not load config file")
+		fmt.Fprintln(os.Stderr, "[error]", configFile, ": Could not load config file:", err)
 		return 4
 	}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "[error] Could not initialize watcher")
+		fmt.Fprintln(os.Stderr, "[error] Could not initialize watcher:", err)
 		return 5
 	}
 	defer watcher.Close()
 
 	// Run watcher
 	done := make(chan int)
-	go poll(watcher, done)
+	go poll(watcher, config, done)
 
 	// Watch the specified directory
 	for _, dir := range directories {
 		if file, err := os.Stat(dir); err != nil || !file.IsDir() {
-			fmt.Fprintln(os.Stderr, "[error]", dir, ": given path does not exist or not a directory")
+			fmt.Fprintln(os.Stderr, "[error]", dir, ": given path does not exist or not a directory:", err)
 			return 6
 		}
 	}
 	for _, dir := range directories {
 		err := watchDirsUnder(dir, watcher)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "[error]", dir, ": Could not watch directory")
+			fmt.Fprintln(os.Stderr, "[error]", dir, ": Could not watch directory:", err)
 			return 7
 		}
 	}
@@ -96,6 +101,7 @@ type Config struct {
 	OnRename string `yaml:"on_rename"`
 	OnChmod  string `yaml:"on_chmod"`
 	Action   []Action
+	Shell    []string
 }
 
 type Action struct {
@@ -111,6 +117,12 @@ func loadConfig(filename string) (*Config, error) {
 	}
 
 	var config Config
+	if runtime.GOOS == "windows" {
+		config.Shell = []string{"cmd.exe", "/c"}
+	} else {
+		config.Shell = []string{"bash", "-c"}
+	}
+
 	err = yaml.Unmarshal(buf, &config)
 	if err != nil {
 		return nil, err
@@ -128,13 +140,113 @@ func validateConfig(config *Config) error {
 	if len(config.Action) == 0 {
 		return errors.New("No actions were defined")
 	}
+	for _, action := range config.Action {
+		if err := validateActionConfig(&action); err != nil {
+			return err
+		}
+	}
 
-	// TODO
+	if config.OnWrite == "" &&
+		config.OnCreate == "" &&
+		config.OnRemove == "" &&
+		config.OnRename == "" &&
+		config.OnChmod == "" {
+		return errors.New("No event(s) were specified")
+	}
+
+	if config.OnWrite != "" && lookupAction(config.OnWrite, config) == nil {
+		return errors.New("Action '" + config.OnWrite + "' is not defined")
+	}
+	if config.OnCreate != "" && lookupAction(config.OnCreate, config) == nil {
+		return errors.New("Action '" + config.OnCreate + "' is not defined")
+	}
+	if config.OnRemove != "" && lookupAction(config.OnRemove, config) == nil {
+		return errors.New("Action '" + config.OnRemove + "' is not defined")
+	}
+	if config.OnRename != "" && lookupAction(config.OnRename, config) == nil {
+		return errors.New("Action '" + config.OnRename + "' is not defined")
+	}
+	if config.OnChmod != "" && lookupAction(config.OnChmod, config) == nil {
+		return errors.New("Action '" + config.OnChmod + "' is not defined")
+	}
 
 	return nil
 }
 
-func poll(watcher *fsnotify.Watcher, done chan int) {
+func validateActionConfig(action *Action) error {
+	if action.Name == "" {
+		return errors.New("action's 'name' is empty")
+	}
+	if action.Sleep == "" {
+		return errors.New("action's 'sleep' is empty")
+	}
+	if _, err := parseSleepMSec(action.Sleep); err != nil {
+		return err
+	}
+	if action.Run == "" {
+		return errors.New("action's 'run' is empty")
+	}
+	return nil
+}
+
+func lookupAction(actionName string, config *Config) *Action {
+	if actionName == "" {
+		return nil
+	}
+	for _, action := range config.Action {
+		if action.Name == actionName {
+			return &action
+		}
+	}
+	return nil
+}
+
+func invokeAction(actionName string, config *Config, done chan int) {
+	action := lookupAction(actionName, config)
+	if action == nil {
+		log.Println(actionName + ": Can't look up action")
+		done <- 20
+		return
+	}
+	// Sleep
+	msec := mustParseSleepMSec(action.Sleep)
+	time.Sleep(time.Duration(msec) * time.Millisecond)
+	// Action
+	cmd := config.Shell[0]
+	err := exec.Command(cmd, append(config.Shell[1:], action.Run)...).Run()
+	if err != nil {
+		log.Println(err)
+		done <- 21
+		return
+	}
+}
+
+var sleepPattern = regexp.MustCompile(`^(\d+)(m?s(ec)?)$`)
+
+func parseSleepMSec(sleep string) (int, error) {
+	result := sleepPattern.FindStringSubmatch(sleep)
+	if len(result) == 0 {
+		return 0, errors.New(sleep + ": 'sleep' is invalid value")
+	}
+	msec, err := strconv.Atoi(result[1])
+	if err != nil {
+		return 0, err
+	}
+	if result[2] == "sec" || result[2] == "s" {
+		msec = msec * 1000
+	}
+	return msec, nil
+}
+
+func mustParseSleepMSec(sleep string) int {
+	msec, err := parseSleepMSec(sleep)
+	if err != nil {
+		panic(err)
+	}
+	return msec
+}
+
+func poll(watcher *fsnotify.Watcher, config *Config, done chan int) {
 	for {
 		select {
 		case event := <-watcher.Events:
@@ -142,8 +254,12 @@ func poll(watcher *fsnotify.Watcher, done chan int) {
 			switch {
 			case event.Op&fsnotify.Write == fsnotify.Write:
 				log.Println("Modified file: ", event.Name)
+				if config.OnWrite != "" {
+					go invokeAction(config.OnWrite, config, done)
+				}
 			case event.Op&fsnotify.Create == fsnotify.Create:
 				log.Println("Created file: ", event.Name)
+				// Watch a new directory
 				if file, err := os.Stat(event.Name); err == nil && file.IsDir() {
 					err = watcher.Add(event.Name)
 					if err != nil {
@@ -152,13 +268,26 @@ func poll(watcher *fsnotify.Watcher, done chan int) {
 					}
 					log.Println("Watched: ", event.Name)
 				}
+				if config.OnCreate != "" {
+					go invokeAction(config.OnCreate, config, done)
+				}
 			case event.Op&fsnotify.Remove == fsnotify.Remove:
 				log.Println("Removed file: ", event.Name)
+				if config.OnRemove != "" {
+					go invokeAction(config.OnRemove, config, done)
+				}
 			case event.Op&fsnotify.Rename == fsnotify.Rename:
 				log.Println("Renamed file: ", event.Name)
+				if config.OnRename != "" {
+					go invokeAction(config.OnRename, config, done)
+				}
 			case event.Op&fsnotify.Chmod == fsnotify.Chmod:
 				log.Println("File changed permission: ", event.Name)
+				if config.OnChmod != "" {
+					go invokeAction(config.OnChmod, config, done)
+				}
 			}
+
 		case err := <-watcher.Errors:
 			log.Println("error: ", err)
 			done <- 11
