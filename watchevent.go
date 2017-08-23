@@ -105,9 +105,10 @@ type Config struct {
 }
 
 type Action struct {
-	Name     string
-	Interval string
-	Run      string
+	Name            string
+	Interval        string
+	EventAtInterval string `yaml:"event_at_interval"`
+	Run             string
 }
 
 func loadConfig(filename string) (*Config, error) {
@@ -116,6 +117,7 @@ func loadConfig(filename string) (*Config, error) {
 		return nil, err
 	}
 
+	// Default values
 	var config Config
 	if runtime.GOOS == "windows" {
 		config.Shell = []string{"cmd.exe", "/c"}
@@ -177,12 +179,21 @@ func validateActionConfig(action *Action) error {
 	if action.Name == "" {
 		return errors.New("action's 'name' is empty")
 	}
+
 	if action.Interval == "" {
 		return errors.New("action's 'interval' is empty")
 	}
 	if _, err := parseIntervalMSec(action.Interval); err != nil {
 		return err
 	}
+
+	if action.EventAtInterval != "ignore" &&
+		action.EventAtInterval != "cancel" &&
+		action.EventAtInterval != "postpone" {
+		return errors.New("action's 'event_at_interval' is invalid value " +
+			"(\"ignore\" or \"cancel\" or \"postpone\")")
+	}
+
 	if action.Run == "" {
 		return errors.New("action's 'run' is empty")
 	}
@@ -201,7 +212,11 @@ func lookupAction(actionName string, config *Config) *Action {
 	return nil
 }
 
-func invokeAction(actionName string, config *Config, event *fsnotify.Event, done chan int) {
+func invokeAction(actionName string,
+	config *Config,
+	event *fsnotify.Event,
+	newEvent chan bool,
+	done chan int) {
 	action := lookupAction(actionName, config)
 	if action == nil {
 		log.Println(actionName + ": Can't look up action")
@@ -211,7 +226,24 @@ func invokeAction(actionName string, config *Config, event *fsnotify.Event, done
 	// Sleep
 	log.Println("Sleeping", action.Interval, "...")
 	msec := mustParseIntervalMSec(action.Interval)
-	time.Sleep(time.Duration(msec) * time.Millisecond)
+	timeout := time.After(time.Duration(msec) * time.Millisecond)
+	if action.EventAtInterval == "ignore" {
+		<-timeout
+	} else {
+		select {
+		case <-timeout:
+			// Execute action
+		case <-newEvent:
+			if action.EventAtInterval == "postpone" {
+				log.Println(actionName + ": postponed")
+				invokeAction(actionName, config, event, newEvent, done)
+				return
+			} else if action.EventAtInterval == "cancel" {
+				log.Println(actionName + ": canceled")
+				return
+			}
+		}
+	}
 	// Action
 	log.Println("Executing", action.Run, "...")
 	exe := config.Shell[0]
@@ -254,14 +286,19 @@ func mustParseIntervalMSec(interval string) int {
 
 func poll(watcher *fsnotify.Watcher, config *Config, done chan int) {
 	for {
+		newEvent := make(chan bool, 1)
 		select {
 		case event := <-watcher.Events:
 			log.Println("event: ", event)
+			// Do not block when sending to channel
+			select {
+			case newEvent <- true:
+			}
 			switch {
 			case event.Op&fsnotify.Write == fsnotify.Write:
 				log.Println("Modified file: ", event.Name)
 				if config.OnWrite != "" {
-					go invokeAction(config.OnWrite, config, &event, done)
+					go invokeAction(config.OnWrite, config, &event, newEvent, done)
 				}
 			case event.Op&fsnotify.Create == fsnotify.Create:
 				log.Println("Created file: ", event.Name)
@@ -275,22 +312,22 @@ func poll(watcher *fsnotify.Watcher, config *Config, done chan int) {
 					log.Println("Watched: ", event.Name)
 				}
 				if config.OnCreate != "" {
-					go invokeAction(config.OnCreate, config, &event, done)
+					go invokeAction(config.OnCreate, config, &event, newEvent, done)
 				}
 			case event.Op&fsnotify.Remove == fsnotify.Remove:
 				log.Println("Removed file: ", event.Name)
 				if config.OnRemove != "" {
-					go invokeAction(config.OnRemove, config, &event, done)
+					go invokeAction(config.OnRemove, config, &event, newEvent, done)
 				}
 			case event.Op&fsnotify.Rename == fsnotify.Rename:
 				log.Println("Renamed file: ", event.Name)
 				if config.OnRename != "" {
-					go invokeAction(config.OnRename, config, &event, done)
+					go invokeAction(config.OnRename, config, &event, newEvent, done)
 				}
 			case event.Op&fsnotify.Chmod == fsnotify.Chmod:
 				log.Println("File changed permission: ", event.Name)
 				if config.OnChmod != "" {
-					go invokeAction(config.OnChmod, config, &event, done)
+					go invokeAction(config.OnChmod, config, &event, newEvent, done)
 				}
 			}
 
