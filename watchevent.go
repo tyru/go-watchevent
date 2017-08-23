@@ -105,9 +105,9 @@ type Config struct {
 }
 
 type Action struct {
-	Name  string
-	Sleep string
-	Run   string
+	Name     string
+	Interval string
+	Run      string
 }
 
 func loadConfig(filename string) (*Config, error) {
@@ -177,10 +177,10 @@ func validateActionConfig(action *Action) error {
 	if action.Name == "" {
 		return errors.New("action's 'name' is empty")
 	}
-	if action.Sleep == "" {
-		return errors.New("action's 'sleep' is empty")
+	if action.Interval == "" {
+		return errors.New("action's 'interval' is empty")
 	}
-	if _, err := parseSleepMSec(action.Sleep); err != nil {
+	if _, err := parseIntervalMSec(action.Interval); err != nil {
 		return err
 	}
 	if action.Run == "" {
@@ -209,8 +209,8 @@ func invokeAction(actionName string, config *Config, event *fsnotify.Event, done
 		return
 	}
 	// Sleep
-	log.Println("Sleeping", action.Sleep, "...")
-	msec := mustParseSleepMSec(action.Sleep)
+	log.Println("Sleeping", action.Interval, "...")
+	msec := mustParseIntervalMSec(action.Interval)
 	time.Sleep(time.Duration(msec) * time.Millisecond)
 	// Action
 	log.Println("Executing", action.Run, "...")
@@ -227,12 +227,12 @@ func invokeAction(actionName string, config *Config, event *fsnotify.Event, done
 	}
 }
 
-var sleepPattern = regexp.MustCompile(`^(\d+)(m?s(ec)?)$`)
+var intervalPattern = regexp.MustCompile(`^(\d+)(m?s(ec)?)$`)
 
-func parseSleepMSec(sleep string) (int, error) {
-	result := sleepPattern.FindStringSubmatch(sleep)
+func parseIntervalMSec(interval string) (int, error) {
+	result := intervalPattern.FindStringSubmatch(interval)
 	if len(result) == 0 {
-		return 0, errors.New(sleep + ": 'sleep' is invalid value")
+		return 0, errors.New(interval + ": 'interval' is invalid value")
 	}
 	msec, err := strconv.Atoi(result[1])
 	if err != nil {
@@ -244,8 +244,8 @@ func parseSleepMSec(sleep string) (int, error) {
 	return msec, nil
 }
 
-func mustParseSleepMSec(sleep string) int {
-	msec, err := parseSleepMSec(sleep)
+func mustParseIntervalMSec(interval string) int {
+	msec, err := parseIntervalMSec(interval)
 	if err != nil {
 		panic(err)
 	}
