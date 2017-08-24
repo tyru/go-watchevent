@@ -212,19 +212,21 @@ func lookupAction(actionName string, config *Config) *Action {
 	return nil
 }
 
-func invokeAction(actionName string,
+func invokeAction(cid CID,
+	actionName string,
 	config *Config,
 	event *fsnotify.Event,
 	newEvent chan bool,
 	done chan int) {
+
 	action := lookupAction(actionName, config)
 	if action == nil {
-		log.Println(actionName + ": Can't look up action")
+		log.Printf("(%v) %s: Can't look up action", cid, actionName)
 		done <- 20
 		return
 	}
 	// Sleep
-	log.Println("Sleeping", action.Interval, "...")
+	log.Printf("(%v) Sleeping %s ...", cid, action.Interval)
 	msec := mustParseIntervalMSec(action.Interval)
 	timeout := time.After(time.Duration(msec) * time.Millisecond)
 	if action.EventAtInterval == "ignore" {
@@ -235,17 +237,17 @@ func invokeAction(actionName string,
 			// Execute action
 		case <-newEvent:
 			if action.EventAtInterval == "retry" {
-				log.Println(actionName + ": retried")
-				invokeAction(actionName, config, event, newEvent, done)
+				log.Printf("(%v) %s: retried", cid, actionName)
+				invokeAction(cid, actionName, config, event, newEvent, done)
 				return
 			} else if action.EventAtInterval == "cancel" {
-				log.Println(actionName + ": canceled")
+				log.Printf("(%v) %s: canceled", cid, actionName)
 				return
 			}
 		}
 	}
 	// Action
-	log.Println("Executing", action.Run, "...")
+	log.Printf("(%v) Executing %s ...", cid, action.Run)
 	exe := config.Shell[0]
 	cmd := exec.Command(exe, append(config.Shell[1:], action.Run)...)
 	cmd.Env = append(os.Environ(),
@@ -253,7 +255,7 @@ func invokeAction(actionName string,
 		"WEV_PATH="+event.Name)
 	err := cmd.Run()
 	if err != nil {
-		log.Println(err)
+		log.Printf("(%v) %v ...", cid, action.Run)
 		done <- 21
 		return
 	}
@@ -289,7 +291,6 @@ func poll(watcher *fsnotify.Watcher, config *Config, done chan int) {
 		newEvent := make(chan bool, 1)
 		select {
 		case event := <-watcher.Events:
-			log.Println("event: ", event)
 			fireEvent(&event, newEvent, watcher, config, done)
 
 		case err := <-watcher.Errors:
@@ -305,14 +306,16 @@ func fireEvent(event *fsnotify.Event, newEvent chan bool, watcher *fsnotify.Watc
 	case newEvent <- true:
 	}
 
+	cid := makeCommandID()
+
 	switch {
 	case event.Op&fsnotify.Write == fsnotify.Write:
-		log.Println("Modified file: ", event.Name)
+		log.Printf("(%v) Modified file: %s\n", cid, event.Name)
 		if config.OnWrite != "" {
-			go invokeAction(config.OnWrite, config, event, newEvent, done)
+			go invokeAction(cid, config.OnWrite, config, event, newEvent, done)
 		}
 	case event.Op&fsnotify.Create == fsnotify.Create:
-		log.Println("Created file: ", event.Name)
+		log.Printf("(%v) Created file: %s\n", cid, event.Name)
 		// Watch a new directory
 		if file, err := os.Stat(event.Name); err == nil && file.IsDir() {
 			err = watchRecursively(event.Name, watcher)
@@ -320,35 +323,45 @@ func fireEvent(event *fsnotify.Event, newEvent chan bool, watcher *fsnotify.Watc
 				log.Fatal(err)
 				done <- 10
 			}
-			log.Println("Watched: ", event.Name)
 		}
 		if config.OnCreate != "" {
-			go invokeAction(config.OnCreate, config, event, newEvent, done)
+			go invokeAction(cid, config.OnCreate, config, event, newEvent, done)
 		}
 	case event.Op&fsnotify.Remove == fsnotify.Remove:
-		log.Println("Removed file: ", event.Name)
+		log.Printf("(%v) Removed file: %s\n", cid, event.Name)
 		if config.OnRemove != "" {
-			go invokeAction(config.OnRemove, config, event, newEvent, done)
+			go invokeAction(cid, config.OnRemove, config, event, newEvent, done)
 		}
 	case event.Op&fsnotify.Rename == fsnotify.Rename:
-		log.Println("Renamed file: ", event.Name)
+		log.Printf("(%v) Renamed file: %s\n", cid, event.Name)
 		if config.OnRename != "" {
-			go invokeAction(config.OnRename, config, event, newEvent, done)
+			go invokeAction(cid, config.OnRename, config, event, newEvent, done)
 		}
 	case event.Op&fsnotify.Chmod == fsnotify.Chmod:
-		log.Println("File changed permission: ", event.Name)
+		log.Printf("(%v) File changed permission: %s\n", cid, event.Name)
 		if config.OnChmod != "" {
-			go invokeAction(config.OnChmod, config, event, newEvent, done)
+			go invokeAction(cid, config.OnChmod, config, event, newEvent, done)
 		}
 	}
 }
 
+type CID float64
+
+var currentCID CID
+
+func makeCommandID() CID {
+	currentCID += 1
+	return currentCID
+}
+
 func watchRecursively(root string, watcher *fsnotify.Watcher) error {
-	files, err := ioutil.ReadDir(root)
+	err := watcher.Add(root)
 	if err != nil {
 		return err
 	}
-	err = watcher.Add(root)
+	log.Println("Watched:", root)
+
+	files, err := ioutil.ReadDir(root)
 	if err != nil {
 		return err
 	}
