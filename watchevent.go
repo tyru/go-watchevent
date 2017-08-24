@@ -189,9 +189,9 @@ func validateActionConfig(action *Action) error {
 
 	if action.EventAtInterval != "ignore" &&
 		action.EventAtInterval != "cancel" &&
-		action.EventAtInterval != "postpone" {
+		action.EventAtInterval != "retry" {
 		return errors.New("action's 'event_at_interval' is invalid value " +
-			"(\"ignore\" or \"cancel\" or \"postpone\")")
+			"(\"ignore\" or \"cancel\" or \"retry\")")
 	}
 
 	if action.Run == "" {
@@ -234,8 +234,8 @@ func invokeAction(actionName string,
 		case <-timeout:
 			// Execute action
 		case <-newEvent:
-			if action.EventAtInterval == "postpone" {
-				log.Println(actionName + ": postponed")
+			if action.EventAtInterval == "retry" {
+				log.Println(actionName + ": retried")
 				invokeAction(actionName, config, event, newEvent, done)
 				return
 			} else if action.EventAtInterval == "cancel" {
