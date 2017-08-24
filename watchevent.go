@@ -181,13 +181,19 @@ func validateActionConfig(action *Action) error {
 	}
 
 	if action.Interval == "" {
-		return errors.New("action's 'interval' is empty")
+		action.Interval = "0"
 	}
-	if _, err := parseIntervalMSec(action.Interval); err != nil {
+	interval, err := parseIntervalMSec(action.Interval)
+	if err != nil {
 		return err
 	}
 
-	if action.EventAtInterval != "ignore" &&
+	if action.EventAtInterval == "" {
+		// when interval is 0, allow empty 'interval'
+		if interval != 0 {
+			return errors.New("action's 'event_at_interval' is empty")
+		}
+	} else if action.EventAtInterval != "ignore" &&
 		action.EventAtInterval != "cancel" &&
 		action.EventAtInterval != "retry" {
 		return errors.New("action's 'event_at_interval' is invalid value " +
@@ -261,7 +267,7 @@ func invokeAction(cid CID,
 	}
 }
 
-var intervalPattern = regexp.MustCompile(`^(\d+)(m?s(ec)?)$`)
+var intervalPattern = regexp.MustCompile(`^0*(\d+)(m?s(ec)?)?$`)
 
 func parseIntervalMSec(interval string) (int, error) {
 	result := intervalPattern.FindStringSubmatch(interval)
@@ -271,6 +277,9 @@ func parseIntervalMSec(interval string) (int, error) {
 	msec, err := strconv.Atoi(result[1])
 	if err != nil {
 		return 0, err
+	}
+	if result[2] == "" && result[1] != "0" {
+		return 0, errors.New(interval + ": must specify unit to 'interval' except '0'")
 	}
 	if result[2] == "sec" || result[2] == "s" {
 		msec = msec * 1000
