@@ -105,10 +105,15 @@ type Config struct {
 }
 
 type Action struct {
-	Name            string
-	Interval        string
-	EventAtInterval string `yaml:"event_at_interval"`
-	Run             string
+	Name           string
+	Interval       string
+	IntervalAction []IntervalAction `yaml:"interval_action"`
+	Run            string
+}
+
+type IntervalAction struct {
+	On []string
+	Do string
 }
 
 func loadConfig(filename string) (*Config, error) {
@@ -183,27 +188,106 @@ func validateActionConfig(action *Action) error {
 	if action.Interval == "" {
 		action.Interval = "0"
 	}
-	interval, err := parseIntervalMSec(action.Interval)
+	_, err := parseIntervalMSec(action.Interval)
 	if err != nil {
 		return err
 	}
 
-	if action.EventAtInterval == "" {
-		// when interval is 0, allow empty 'interval'
-		if interval != 0 {
-			return errors.New("action's 'event_at_interval' is empty")
-		}
-	} else if action.EventAtInterval != "ignore" &&
-		action.EventAtInterval != "cancel" &&
-		action.EventAtInterval != "retry" {
-		return errors.New("action's 'event_at_interval' is invalid value " +
-			"(\"ignore\" or \"cancel\" or \"retry\")")
+	err = validateIntervalAction(action.IntervalAction)
+	if err != nil {
+		return err
 	}
 
 	if action.Run == "" {
 		return errors.New("action's 'run' is empty")
 	}
 	return nil
+}
+
+var RxOn = regexp.MustCompile(`^!?(self|write|create|remove|rename|chmod)$`)
+
+func validateIntervalAction(intervalAction []IntervalAction) error {
+	for i, iaction := range intervalAction {
+		for j, on := range iaction.On {
+			if !RxOn.MatchString(on) {
+				return errors.New("'interval_action[" + strconv.Itoa(i) + "].on[" +
+					strconv.Itoa(j) + "]' is invalid value (either \"self\", \"write\", " +
+					"\"create\", \"remove\", \"rename\", \"chmod\")")
+			}
+		}
+		if iaction.Do != "ignore" && iaction.Do != "cancel" && iaction.Do != "retry" {
+			return errors.New("'interval_action[" + strconv.Itoa(i) + "].do' is invalid value " +
+				"(\"ignore\" or \"cancel\" or \"retry\")")
+		}
+	}
+	return nil
+}
+
+type ActionType uint32
+
+const (
+	Ignore ActionType = 1
+	Retry
+	Cancel
+)
+
+func getIntervalAction(
+	intervalAction []IntervalAction,
+	selfEventOp fsnotify.Op,
+	newEventOp fsnotify.Op,
+	elseValue ActionType) ActionType {
+
+	selfOp := mustStringifyOp(selfEventOp)
+	newOp := mustStringifyOp(newEventOp)
+
+	for _, iaction := range intervalAction {
+		for _, on := range iaction.On {
+			var invert bool
+			var onName string
+			if strings.HasPrefix(on, "!") {
+				invert = true
+				onName = on[1:]
+			} else {
+				invert = false
+				onName = on
+			}
+			if onName == "self" {
+				onName = selfOp
+			}
+			if (!invert && onName == newOp) || (invert && onName != newOp) {
+				return mustParseActionDo(iaction.Do)
+			}
+		}
+	}
+	return elseValue
+}
+
+func mustStringifyOp(op fsnotify.Op) string {
+	if op&fsnotify.Write == fsnotify.Write {
+		return "write"
+	} else if op&fsnotify.Create == fsnotify.Create {
+		return "create"
+	} else if op&fsnotify.Remove == fsnotify.Remove {
+		return "remove"
+	} else if op&fsnotify.Rename == fsnotify.Rename {
+		return "rename"
+	} else if op&fsnotify.Chmod == fsnotify.Chmod {
+		return "chmod"
+	} else {
+		panic(strconv.Itoa(int(op)) + ": Unknown fsnotify.Op value")
+	}
+}
+
+func mustParseActionDo(do string) ActionType {
+	if do == "ignore" {
+		return Ignore
+	} else if do == "retry" {
+		return Retry
+	} else if do == "cancel" {
+		return Cancel
+	} else {
+		panic(do + ": invalid 'interval_action[].do'")
+	}
 }
 
 func lookupAction(actionName string, config *Config) *Action {
@@ -222,7 +306,7 @@ func invokeAction(cid CID,
 	actionName string,
 	config *Config,
 	event *fsnotify.Event,
-	newEvent chan bool,
+	newEvent chan fsnotify.Op,
 	done chan int) {
 
 	action := lookupAction(actionName, config)
@@ -235,21 +319,27 @@ func invokeAction(cid CID,
 	log.Printf("(%v) Sleeping %s ...", cid, action.Interval)
 	msec := mustParseIntervalMSec(action.Interval)
 	timeout := time.After(time.Duration(msec) * time.Millisecond)
-	if action.EventAtInterval == "ignore" {
-		<-timeout
-	} else {
-		select {
-		case <-timeout:
-			// Execute action
-		case <-newEvent:
-			if action.EventAtInterval == "retry" {
-				log.Printf("(%v) %s: retried", cid, actionName)
-				invokeAction(cid, actionName, config, event, newEvent, done)
-				return
-			} else if action.EventAtInterval == "cancel" {
-				log.Printf("(%v) %s: canceled", cid, actionName)
-				return
+	select {
+	case <-timeout:
+		// Execute action
+	case op := <-newEvent:
+		intervalAction := getIntervalAction(action.IntervalAction, event.Op, op, Ignore)
+		if intervalAction == Ignore {
+			// TODO: show intercepting event cid
+			log.Printf("(%v) %s: ignored", cid, actionName)
+			select {
+			case <-timeout:
 			}
+			// Execute action
+		} else if intervalAction == Retry {
+			// TODO: show intercepting event cid
+			log.Printf("(%v) %s: retried", cid, actionName)
+			invokeAction(cid, actionName, config, event, newEvent, done)
+			return
+		} else if intervalAction == Cancel {
+			// TODO: show intercepting event cid
+			log.Printf("(%v) %s: canceled", cid, actionName)
+			return
 		}
 	}
 	// Action
@@ -296,11 +386,11 @@ func mustParseIntervalMSec(interval string) int {
 }
 
 func poll(watcher *fsnotify.Watcher, config *Config, done chan int) {
+	newEvent := make(chan fsnotify.Op, 1)
 	for {
-		newEvent := make(chan bool, 1)
 		select {
 		case event := <-watcher.Events:
-			fireEvent(&event, newEvent, watcher, config, done)
+			handleEvent(&event, newEvent, watcher, config, done)
 
 		case err := <-watcher.Errors:
 			log.Println("error: ", err)
@@ -309,22 +399,21 @@ func poll(watcher *fsnotify.Watcher, config *Config, done chan int) {
 	}
 }
 
-func fireEvent(event *fsnotify.Event, newEvent chan bool, watcher *fsnotify.Watcher, config *Config, done chan int) {
-	// Do not block when sending to channel
-	select {
-	case newEvent <- true:
-	}
+func handleEvent(event *fsnotify.Event, newEvent chan fsnotify.Op, watcher *fsnotify.Watcher, config *Config, done chan int) {
 
 	cid := makeCommandID()
 
 	switch {
 	case event.Op&fsnotify.Write == fsnotify.Write:
 		log.Printf("(%v) Modified file: %s\n", cid, event.Name)
+		sendNonBlock(newEvent, fsnotify.Write)
 		if config.OnWrite != "" {
 			go invokeAction(cid, config.OnWrite, config, event, newEvent, done)
 		}
+
 	case event.Op&fsnotify.Create == fsnotify.Create:
 		log.Printf("(%v) Created file: %s\n", cid, event.Name)
+		sendNonBlock(newEvent, fsnotify.Create)
 		// Watch a new directory
 		if file, err := os.Stat(event.Name); err == nil && file.IsDir() {
 			err = watchRecursively(event.Name, watcher)
@@ -336,21 +425,34 @@ func fireEvent(event *fsnotify.Event, newEvent chan bool, watcher *fsnotify.Watc
 		if config.OnCreate != "" {
 			go invokeAction(cid, config.OnCreate, config, event, newEvent, done)
 		}
+
 	case event.Op&fsnotify.Remove == fsnotify.Remove:
 		log.Printf("(%v) Removed file: %s\n", cid, event.Name)
+		sendNonBlock(newEvent, fsnotify.Remove)
 		if config.OnRemove != "" {
 			go invokeAction(cid, config.OnRemove, config, event, newEvent, done)
 		}
+
 	case event.Op&fsnotify.Rename == fsnotify.Rename:
 		log.Printf("(%v) Renamed file: %s\n", cid, event.Name)
+		sendNonBlock(newEvent, fsnotify.Rename)
 		if config.OnRename != "" {
 			go invokeAction(cid, config.OnRename, config, event, newEvent, done)
 		}
+
 	case event.Op&fsnotify.Chmod == fsnotify.Chmod:
 		log.Printf("(%v) File changed permission: %s\n", cid, event.Name)
+		sendNonBlock(newEvent, fsnotify.Chmod)
 		if config.OnChmod != "" {
 			go invokeAction(cid, config.OnChmod, config, event, newEvent, done)
 		}
+	}
+}
+
+// Do not block when sending to channel
+func sendNonBlock(ch chan fsnotify.Op, op fsnotify.Op) {
+	select {
+	case ch <- op:
 	}
 }
 
