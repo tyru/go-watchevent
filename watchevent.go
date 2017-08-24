@@ -84,7 +84,7 @@ func Main() int {
 		}
 	}
 	for _, dir := range directories {
-		err := watchDirsUnder(dir, watcher)
+		err := watchRecursively(dir, watcher)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "[error]", dir, ": Could not watch directory:", err)
 			return 7
@@ -315,7 +315,7 @@ func fireEvent(event *fsnotify.Event, newEvent chan bool, watcher *fsnotify.Watc
 		log.Println("Created file: ", event.Name)
 		// Watch a new directory
 		if file, err := os.Stat(event.Name); err == nil && file.IsDir() {
-			err = watcher.Add(event.Name)
+			err = watchRecursively(event.Name, watcher)
 			if err != nil {
 				log.Fatal(err)
 				done <- 10
@@ -343,7 +343,7 @@ func fireEvent(event *fsnotify.Event, newEvent chan bool, watcher *fsnotify.Watc
 	}
 }
 
-func watchDirsUnder(root string, watcher *fsnotify.Watcher) error {
+func watchRecursively(root string, watcher *fsnotify.Watcher) error {
 	files, err := ioutil.ReadDir(root)
 	if err != nil {
 		return err
@@ -354,7 +354,7 @@ func watchDirsUnder(root string, watcher *fsnotify.Watcher) error {
 	}
 	for _, file := range files {
 		if file.IsDir() {
-			err := watchDirsUnder(filepath.Join(root, file.Name()), watcher)
+			err := watchRecursively(filepath.Join(root, file.Name()), watcher)
 			if err != nil {
 				return err
 			}
