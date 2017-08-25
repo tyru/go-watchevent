@@ -184,18 +184,17 @@ func MustParseIntervalMSec(interval string) int64 {
 type ActionType uint32
 
 const (
-	Ignore ActionType = 1
+	Ignore ActionType = iota
 	Retry
 	Cancel
 )
 
 func (action *Action) DetermineIntervalAction(
-	selfEventOp fsnotify.Op,
-	newEventOp fsnotify.Op,
+	selfOp fsnotify.Op,
+	newOp fsnotify.Op,
 	elseValue ActionType) (ActionType, error) {
 
 	intervalAction := action.IntervalAction
-
 	for _, iaction := range intervalAction {
 		for _, on := range iaction.On {
 			var invert bool
@@ -203,20 +202,19 @@ func (action *Action) DetermineIntervalAction(
 			if strings.HasPrefix(on, "!") {
 				invert = true
 				var err error
-				op, err = convertEventNameToOp(on[1:], selfEventOp)
+				op, err = convertEventNameToOp(on[1:], selfOp)
 				if err != nil {
 					return Ignore, err
 				}
 			} else {
 				invert = false
 				var err error
-				op, err = convertEventNameToOp(on, selfEventOp)
+				op, err = convertEventNameToOp(on, selfOp)
 				if err != nil {
 					return Ignore, err
 				}
 			}
-			if !invert && op == newEventOp ||
-				invert && op != newEventOp {
+			if !invert && op == newOp || invert && op != newOp {
 				do, err := parseActionDo(iaction.Do)
 				if err != nil {
 					return Ignore, err
@@ -228,9 +226,9 @@ func (action *Action) DetermineIntervalAction(
 	return elseValue, nil
 }
 
-func convertEventNameToOp(eventName string, selfEventOp fsnotify.Op) (fsnotify.Op, error) {
+func convertEventNameToOp(eventName string, selfOp fsnotify.Op) (fsnotify.Op, error) {
 	if eventName == "self" {
-		return selfEventOp, nil
+		return selfOp, nil
 	} else if eventName == "write" {
 		return fsnotify.Write, nil
 	} else if eventName == "create" {
