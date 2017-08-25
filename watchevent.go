@@ -22,18 +22,17 @@ func main() {
 	os.Exit(Main())
 }
 
-type Directories []string
-
-func (dir *Directories) String() string {
-	return strings.Join(([]string)(*dir), ",")
-}
-
-func (dir *Directories) Set(value string) error {
-	*dir = append(*dir, value)
-	return nil
-}
-
 func Main() int {
+
+	flag.Usage = func() {
+		name := filepath.Base(os.Args[0])
+		fmt.Fprintf(os.Stderr, `Usage of %s:
+   %s [OPTIONS]
+Options
+`, name, name)
+		flag.PrintDefaults()
+	}
+
 	// Parse args
 	var configFile string
 	flag.StringVar(&configFile, "config", "", "config file")
@@ -88,6 +87,17 @@ func Main() int {
 	}
 
 	return <-exitAll
+}
+
+type Directories []string
+
+func (dir *Directories) String() string {
+	return strings.Join(([]string)(*dir), ",")
+}
+
+func (dir *Directories) Set(value string) error {
+	*dir = append(*dir, value)
+	return nil
 }
 
 func invokeAction(invocation Invocation) {
