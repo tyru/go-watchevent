@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -9,13 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"runtime"
-	"strconv"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v2"
+	"watchevent/config"
 
 	"github.com/go-fsnotify/fsnotify"
 )
@@ -59,7 +54,7 @@ func Main() int {
 	}
 
 	// Load config
-	config, err := loadConfig(configFile)
+	conf, err := config.LoadConfig(configFile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[error]", configFile, ": Could not load config file:", err)
 		return 4
@@ -74,7 +69,7 @@ func Main() int {
 
 	// Run watcher
 	done := make(chan int)
-	go poll(watcher, config, done)
+	go poll(watcher, conf, done)
 
 	// Watch the specified directory
 	for _, dir := range directories {
@@ -94,222 +89,14 @@ func Main() int {
 	return <-done
 }
 
-type Config struct {
-	OnWrite  string `yaml:"on_write"`
-	OnCreate string `yaml:"on_create"`
-	OnRemove string `yaml:"on_remove"`
-	OnRename string `yaml:"on_rename"`
-	OnChmod  string `yaml:"on_chmod"`
-	Action   []Action
-	Shell    []string
-}
-
-type Action struct {
-	Name           string
-	Interval       string
-	IntervalAction []IntervalAction `yaml:"interval_action"`
-	Run            string
-}
-
-type IntervalAction struct {
-	On []string
-	Do string
-}
-
-func loadConfig(filename string) (*Config, error) {
-	buf, err := ioutil.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-
-	// Default values
-	var config Config
-	if runtime.GOOS == "windows" {
-		config.Shell = []string{"cmd.exe", "/c"}
-	} else {
-		config.Shell = []string{"bash", "-c"}
-	}
-
-	err = yaml.Unmarshal(buf, &config)
-	if err != nil {
-		return nil, err
-	}
-
-	err = validateConfig(&config)
-	if err != nil {
-		return nil, err
-	}
-
-	return &config, nil
-}
-
-func validateConfig(config *Config) error {
-	if len(config.Action) == 0 {
-		return errors.New("No actions were defined")
-	}
-	for _, action := range config.Action {
-		if err := validateActionConfig(&action); err != nil {
-			return err
-		}
-	}
-
-	if config.OnWrite == "" &&
-		config.OnCreate == "" &&
-		config.OnRemove == "" &&
-		config.OnRename == "" &&
-		config.OnChmod == "" {
-		return errors.New("No event(s) were specified")
-	}
-
-	if config.OnWrite != "" && lookupAction(config.OnWrite, config) == nil {
-		return errors.New("Action '" + config.OnWrite + "' is not defined")
-	}
-	if config.OnCreate != "" && lookupAction(config.OnCreate, config) == nil {
-		return errors.New("Action '" + config.OnCreate + "' is not defined")
-	}
-	if config.OnRemove != "" && lookupAction(config.OnRemove, config) == nil {
-		return errors.New("Action '" + config.OnRemove + "' is not defined")
-	}
-	if config.OnRename != "" && lookupAction(config.OnRename, config) == nil {
-		return errors.New("Action '" + config.OnRename + "' is not defined")
-	}
-	if config.OnChmod != "" && lookupAction(config.OnChmod, config) == nil {
-		return errors.New("Action '" + config.OnChmod + "' is not defined")
-	}
-
-	return nil
-}
-
-func validateActionConfig(action *Action) error {
-	if action.Name == "" {
-		return errors.New("action's 'name' is empty")
-	}
-
-	if action.Interval == "" {
-		action.Interval = "0"
-	}
-	_, err := parseIntervalMSec(action.Interval)
-	if err != nil {
-		return err
-	}
-
-	err = validateIntervalAction(action.IntervalAction)
-	if err != nil {
-		return err
-	}
-
-	if action.Run == "" {
-		return errors.New("action's 'run' is empty")
-	}
-	return nil
-}
-
-var RxOn = regexp.MustCompile(`^!?(self|write|create|remove|rename|chmod)$`)
-
-func validateIntervalAction(intervalAction []IntervalAction) error {
-	for i, iaction := range intervalAction {
-		for j, on := range iaction.On {
-			if !RxOn.MatchString(on) {
-				return errors.New("'interval_action[" + strconv.Itoa(i) + "].on[" +
-					strconv.Itoa(j) + "]' is invalid value (either \"self\", \"write\", " +
-					"\"create\", \"remove\", \"rename\", \"chmod\")")
-			}
-		}
-		if iaction.Do != "ignore" && iaction.Do != "cancel" && iaction.Do != "retry" {
-			return errors.New("'interval_action[" + strconv.Itoa(i) + "].do' is invalid value " +
-				"(\"ignore\" or \"cancel\" or \"retry\")")
-		}
-	}
-	return nil
-}
-
-type ActionType uint32
-
-const (
-	Ignore ActionType = 1
-	Retry
-	Cancel
-)
-
-func getIntervalAction(
-	intervalAction []IntervalAction,
-	selfEventOp fsnotify.Op,
-	newEventOp fsnotify.Op,
-	elseValue ActionType) ActionType {
-
-	selfOp := mustStringifyOp(selfEventOp)
-	newOp := mustStringifyOp(newEventOp)
-
-	for _, iaction := range intervalAction {
-		for _, on := range iaction.On {
-			var invert bool
-			var onName string
-			if strings.HasPrefix(on, "!") {
-				invert = true
-				onName = on[1:]
-			} else {
-				invert = false
-				onName = on
-			}
-			if onName == "self" {
-				onName = selfOp
-			}
-			if (!invert && onName == newOp) || (invert && onName != newOp) {
-				return mustParseActionDo(iaction.Do)
-			}
-		}
-	}
-	return elseValue
-}
-
-func mustStringifyOp(op fsnotify.Op) string {
-	if op&fsnotify.Write == fsnotify.Write {
-		return "write"
-	} else if op&fsnotify.Create == fsnotify.Create {
-		return "create"
-	} else if op&fsnotify.Remove == fsnotify.Remove {
-		return "remove"
-	} else if op&fsnotify.Rename == fsnotify.Rename {
-		return "rename"
-	} else if op&fsnotify.Chmod == fsnotify.Chmod {
-		return "chmod"
-	} else {
-		panic(strconv.Itoa(int(op)) + ": Unknown fsnotify.Op value")
-	}
-}
-
-func mustParseActionDo(do string) ActionType {
-	if do == "ignore" {
-		return Ignore
-	} else if do == "retry" {
-		return Retry
-	} else if do == "cancel" {
-		return Cancel
-	} else {
-		panic(do + ": invalid 'interval_action[].do'")
-	}
-}
-
-func lookupAction(actionName string, config *Config) *Action {
-	if actionName == "" {
-		return nil
-	}
-	for _, action := range config.Action {
-		if action.Name == actionName {
-			return &action
-		}
-	}
-	return nil
-}
-
 func invokeAction(cid CID,
 	actionName string,
-	config *Config,
+	conf *config.Config,
 	event *fsnotify.Event,
 	newEvent chan fsnotify.Op,
 	done chan int) {
 
-	action := lookupAction(actionName, config)
+	action := conf.LookupAction(actionName)
 	if action == nil {
 		log.Printf("(%v) %s: Can't look up action", cid, actionName)
 		done <- 20
@@ -317,80 +104,58 @@ func invokeAction(cid CID,
 	}
 	// Sleep
 	log.Printf("(%v) Sleeping %s ...", cid, action.Interval)
-	msec := mustParseIntervalMSec(action.Interval)
+	msec := config.MustParseIntervalMSec(action.Interval)
 	timeout := time.After(time.Duration(msec) * time.Millisecond)
 	select {
 	case <-timeout:
 		// Execute action
 	case op := <-newEvent:
-		intervalAction := getIntervalAction(action.IntervalAction, event.Op, op, Ignore)
-		if intervalAction == Ignore {
+		intervalAction, err := action.DetermineIntervalAction(event.Op, op, config.Ignore)
+		if err != nil {
+			log.Println(err)
+			log.Printf("(%v) %v ...\n", cid, action.Run)
+			done <- 21
+			return
+		}
+		if intervalAction == config.Ignore {
 			// TODO: show intercepting event cid
-			log.Printf("(%v) %s: ignored", cid, actionName)
+			log.Printf("(%v) %s: ignored\n", cid, actionName)
 			select {
 			case <-timeout:
 			}
 			// Execute action
-		} else if intervalAction == Retry {
+		} else if intervalAction == config.Retry {
 			// TODO: show intercepting event cid
-			log.Printf("(%v) %s: retried", cid, actionName)
-			invokeAction(cid, actionName, config, event, newEvent, done)
+			log.Printf("(%v) %s: retried\n", cid, actionName)
+			invokeAction(cid, actionName, conf, event, newEvent, done)
 			return
-		} else if intervalAction == Cancel {
+		} else if intervalAction == config.Cancel {
 			// TODO: show intercepting event cid
-			log.Printf("(%v) %s: canceled", cid, actionName)
+			log.Printf("(%v) %s: canceled\n", cid, actionName)
 			return
 		}
 	}
 	// Action
-	log.Printf("(%v) Executing %s ...", cid, action.Run)
-	exe := config.Shell[0]
-	cmd := exec.Command(exe, append(config.Shell[1:], action.Run)...)
+	log.Printf("(%v) Executing %s ...\n", cid, action.Run)
+	exe := conf.Shell[0]
+	cmd := exec.Command(exe, append(conf.Shell[1:], action.Run)...)
 	cmd.Env = append(os.Environ(),
 		"WEV_EVENT="+event.Op.String(),
 		"WEV_PATH="+event.Name)
 	err := cmd.Run()
 	if err != nil {
-		log.Printf("(%v) %v ...", cid, action.Run)
-		done <- 21
+		log.Printf("(%v) %v ...\n", cid, action.Run)
+		done <- 22
 		return
 	}
 }
 
-var intervalPattern = regexp.MustCompile(`^0*(\d+)(m?s(ec)?)?$`)
-
-func parseIntervalMSec(interval string) (int, error) {
-	result := intervalPattern.FindStringSubmatch(interval)
-	if len(result) == 0 {
-		return 0, errors.New(interval + ": 'interval' is invalid value")
-	}
-	msec, err := strconv.Atoi(result[1])
-	if err != nil {
-		return 0, err
-	}
-	if result[2] == "" && result[1] != "0" {
-		return 0, errors.New(interval + ": must specify unit to 'interval' except '0'")
-	}
-	if result[2] == "sec" || result[2] == "s" {
-		msec = msec * 1000
-	}
-	return msec, nil
-}
-
-func mustParseIntervalMSec(interval string) int {
-	msec, err := parseIntervalMSec(interval)
-	if err != nil {
-		panic(err)
-	}
-	return msec
-}
-
-func poll(watcher *fsnotify.Watcher, config *Config, done chan int) {
+func poll(watcher *fsnotify.Watcher, conf *config.Config, done chan int) {
 	newEvent := make(chan fsnotify.Op, 1)
 	for {
 		select {
 		case event := <-watcher.Events:
-			handleEvent(&event, newEvent, watcher, config, done)
+			handleEvent(&event, newEvent, watcher, conf, done)
 
 		case err := <-watcher.Errors:
 			log.Println("error: ", err)
@@ -399,7 +164,7 @@ func poll(watcher *fsnotify.Watcher, config *Config, done chan int) {
 	}
 }
 
-func handleEvent(event *fsnotify.Event, newEvent chan fsnotify.Op, watcher *fsnotify.Watcher, config *Config, done chan int) {
+func handleEvent(event *fsnotify.Event, newEvent chan fsnotify.Op, watcher *fsnotify.Watcher, conf *config.Config, done chan int) {
 
 	cid := makeCommandID()
 
@@ -407,8 +172,8 @@ func handleEvent(event *fsnotify.Event, newEvent chan fsnotify.Op, watcher *fsno
 	case event.Op&fsnotify.Write == fsnotify.Write:
 		log.Printf("(%v) Modified file: %s\n", cid, event.Name)
 		sendNonBlock(newEvent, fsnotify.Write)
-		if config.OnWrite != "" {
-			go invokeAction(cid, config.OnWrite, config, event, newEvent, done)
+		if conf.OnWrite != "" {
+			go invokeAction(cid, conf.OnWrite, conf, event, newEvent, done)
 		}
 
 	case event.Op&fsnotify.Create == fsnotify.Create:
@@ -422,29 +187,29 @@ func handleEvent(event *fsnotify.Event, newEvent chan fsnotify.Op, watcher *fsno
 				done <- 10
 			}
 		}
-		if config.OnCreate != "" {
-			go invokeAction(cid, config.OnCreate, config, event, newEvent, done)
+		if conf.OnCreate != "" {
+			go invokeAction(cid, conf.OnCreate, conf, event, newEvent, done)
 		}
 
 	case event.Op&fsnotify.Remove == fsnotify.Remove:
 		log.Printf("(%v) Removed file: %s\n", cid, event.Name)
 		sendNonBlock(newEvent, fsnotify.Remove)
-		if config.OnRemove != "" {
-			go invokeAction(cid, config.OnRemove, config, event, newEvent, done)
+		if conf.OnRemove != "" {
+			go invokeAction(cid, conf.OnRemove, conf, event, newEvent, done)
 		}
 
 	case event.Op&fsnotify.Rename == fsnotify.Rename:
 		log.Printf("(%v) Renamed file: %s\n", cid, event.Name)
 		sendNonBlock(newEvent, fsnotify.Rename)
-		if config.OnRename != "" {
-			go invokeAction(cid, config.OnRename, config, event, newEvent, done)
+		if conf.OnRename != "" {
+			go invokeAction(cid, conf.OnRename, conf, event, newEvent, done)
 		}
 
 	case event.Op&fsnotify.Chmod == fsnotify.Chmod:
 		log.Printf("(%v) File changed permission: %s\n", cid, event.Name)
 		sendNonBlock(newEvent, fsnotify.Chmod)
-		if config.OnChmod != "" {
-			go invokeAction(cid, config.OnChmod, config, event, newEvent, done)
+		if conf.OnChmod != "" {
+			go invokeAction(cid, conf.OnChmod, conf, event, newEvent, done)
 		}
 	}
 }
