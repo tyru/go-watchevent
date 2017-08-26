@@ -13,17 +13,13 @@ import (
 )
 
 type Config struct {
-	OnWrite  string `yaml:"on_write"`
-	OnCreate string `yaml:"on_create"`
-	OnRemove string `yaml:"on_remove"`
-	OnRename string `yaml:"on_rename"`
-	OnChmod  string `yaml:"on_chmod"`
-	Action   []Action
-	Shell    []string
+	Action []Action
+	Shell  []string
 }
 
 type Action struct {
 	Name           string
+	On             []string
 	Interval       string
 	IntervalAction []IntervalAction `yaml:"interval_action"`
 	Run            string
@@ -71,42 +67,6 @@ func validateConfig(conf *Config) error {
 		}
 	}
 
-	if conf.OnWrite == "" &&
-		conf.OnCreate == "" &&
-		conf.OnRemove == "" &&
-		conf.OnRename == "" &&
-		conf.OnChmod == "" {
-		return errors.New("No event(s) were specified")
-	}
-
-	if conf.OnWrite != "" && conf.LookupAction(conf.OnWrite) == nil {
-		return errors.New("Action '" + conf.OnWrite + "' is not defined")
-	}
-	if conf.OnCreate != "" && conf.LookupAction(conf.OnCreate) == nil {
-		return errors.New("Action '" + conf.OnCreate + "' is not defined")
-	}
-	if conf.OnRemove != "" && conf.LookupAction(conf.OnRemove) == nil {
-		return errors.New("Action '" + conf.OnRemove + "' is not defined")
-	}
-	if conf.OnRename != "" && conf.LookupAction(conf.OnRename) == nil {
-		return errors.New("Action '" + conf.OnRename + "' is not defined")
-	}
-	if conf.OnChmod != "" && conf.LookupAction(conf.OnChmod) == nil {
-		return errors.New("Action '" + conf.OnChmod + "' is not defined")
-	}
-
-	return nil
-}
-
-func (conf *Config) LookupAction(actionName string) *Action {
-	if actionName == "" {
-		return nil
-	}
-	for _, action := range conf.Action {
-		if action.Name == actionName {
-			return &action
-		}
-	}
 	return nil
 }
 
@@ -115,9 +75,16 @@ func validateActionConfig(action *Action) error {
 		return errors.New("action's 'name' is empty")
 	}
 
-	if action.Interval == "" {
-		action.Interval = "0"
+	for i, on := range action.On {
+		if on != "write" &&
+			on != "create" &&
+			on != "remove" &&
+			on != "rename" &&
+			on != "chmod" {
+			return errors.New(on + ": action[].on[" + strconv.Itoa(i) + "] is invalid value")
+		}
 	}
+
 	_, err := parseIntervalMSec(action.Interval)
 	if err != nil {
 		return err
@@ -156,6 +123,20 @@ func validateIntervalAction(intervalAction []IntervalAction) error {
 var intervalPattern = regexp.MustCompile(`^0*(\d+)(m?s(ec)?)?$`)
 
 func parseIntervalMSec(interval string) (int64, error) {
+	switch interval {
+	case "":
+		fallthrough
+	case "0":
+		fallthrough
+	case "0s":
+		fallthrough
+	case "0sec":
+		fallthrough
+	case "0ms":
+		fallthrough
+	case "0msec":
+		return 0, nil
+	}
 	result := intervalPattern.FindStringSubmatch(interval)
 	if len(result) == 0 {
 		return 0, errors.New(interval + ": 'interval' is invalid value")
@@ -255,4 +236,18 @@ func parseActionDo(do string) (ActionType, error) {
 	} else {
 		return Ignore, errors.New(do + ": invalid 'interval_action[].do'")
 	}
+}
+
+func (config *Config) GetActionsOn(target string) []*Action {
+	actions := make([]*Action, 0, len(config.Action))
+	for i := range config.Action {
+		action := &config.Action[i]
+		for _, on := range action.On {
+			if on == target {
+				actions = append(actions, action)
+				break
+			}
+		}
+	}
+	return actions
 }

@@ -1,12 +1,21 @@
-on_create: post-libresonic-rescan
-on_remove: post-libresonic-rescan
-
 action:
+  - name: write-logs
+    on:
+      - write
+      - create
+      - remove
+      - rename
+      - chmod
+    run: echo $(date) $WEV_EVENT $WEV_PATH >>log.txt
   - name: post-libresonic-rescan
-    interval: 5s
+    on:
+      - create
+      - remove
+    # 15s after latest file change, access to Subsonic API
+    interval: 15s
     interval_action:
       - on: ['self']
         do: cancel
       - on: ['!self']
         do: retry
-    run: echo $(date) $WEV_EVENT $WEV_PATH >>date.txt
+    run: curl http://localhost:4040/rest/startScan

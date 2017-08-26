@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"watchevent/config"
 
@@ -100,76 +101,71 @@ func (dir *Directories) Set(value string) error {
 	return nil
 }
 
+// FIXME: race condition of invocation.newInvocation
 func invokeAction(invocation Invocation) {
-	action := invocation.conf.LookupAction(invocation.actionName)
-	if action == nil {
-		log.Printf("(%v) [error] %s: Can't look up action", invocation.cid, invocation.actionName)
-		invocation.done <- InvocationResult{
-			exitCode:   20,
-			invocation: invocation,
-		}
-		return
-	}
-	log.Printf("(%v) [info] Sleeping %s ...", invocation.cid, action.Interval)
-	msec := config.MustParseIntervalMSec(action.Interval)
-	go doInvocation(invocation, action, msec)
-}
-
-func doInvocation(invocation Invocation, action *config.Action, msec int64) {
 	// Sleep
-	timeout := time.After(time.Duration(msec) * time.Millisecond)
-	select {
-	case <-timeout:
-		// Execute action
-	case newInv := <-invocation.newInvocation:
-		selfOp := invocation.event.Op
-		newOp := newInv.event.Op
-		intervalAction, err := action.DetermineIntervalAction(selfOp, newOp, config.Ignore)
-		if err != nil {
-			log.Println(err)
-			log.Printf("(%v) [error] failed to execute '%v'\n", invocation.cid, action.Run)
-			invocation.done <- InvocationResult{
-				exitCode:   21,
-				invocation: invocation,
-			}
-			return
-		}
-		if intervalAction == config.Ignore {
-			// TODO: show intercepting event cid
-			log.Printf("(%v) [info] %s: ignored\n", invocation.cid, invocation.actionName)
-			select {
-			case <-timeout:
-			}
+	msec := config.MustParseIntervalMSec(invocation.action.Interval)
+	if msec > 0 {
+		log.Printf("(%v/%v) [info] Sleeping %s ...", invocation.eid, invocation.cid, invocation.action.Interval)
+		timeout := time.After(time.Duration(msec) * time.Millisecond)
+		select {
+		case <-timeout:
 			// Execute action
-		} else if intervalAction == config.Retry {
-			// TODO: show intercepting event cid
-			log.Printf("(%v) [info] %s: retried\n", invocation.cid, invocation.actionName)
-			doInvocation(invocation, action, msec)
-			invocation.done <- InvocationResult{
-				exitCode:   0,
-				invocation: invocation,
+		case newInv := <-invocation.newInvocation:
+			selfOp := invocation.event.Op
+			newOp := newInv.event.Op
+			intervalAction, err := invocation.action.DetermineIntervalAction(selfOp, newOp, config.Ignore)
+			if err != nil {
+				log.Println(err)
+				log.Printf("(%v/%v) [error] failed to execute '%v'\n", invocation.eid, invocation.cid, invocation.action.Run)
+				invocation.done <- InvocationResult{
+					exitCode:   21,
+					invocation: invocation,
+				}
+				return
 			}
-			return
-		} else if intervalAction == config.Cancel {
-			// TODO: show intercepting event cid
-			log.Printf("(%v) [info] %s: canceled\n", invocation.cid, invocation.actionName)
-			invocation.done <- InvocationResult{
-				exitCode:   0,
-				invocation: invocation,
+			if intervalAction == config.Ignore {
+				log.Printf("(%v/%v) [info] %s: ignored (intercepted by %v/%v)\n",
+					invocation.eid, invocation.cid, invocation.action.Name, newInv.eid, newInv.cid)
+				select {
+				case <-timeout:
+				}
+				// Execute action
+			} else if intervalAction == config.Retry {
+				log.Printf("(%v/%v) [info] %s: retried (intercepted by %v/%v)\n",
+					invocation.eid, invocation.cid, invocation.action.Name, newInv.eid, newInv.cid)
+				invokeAction(invocation)
+				invocation.done <- InvocationResult{
+					exitCode:   0,
+					invocation: invocation,
+				}
+				return
+			} else if intervalAction == config.Cancel {
+				log.Printf("(%v/%v) [info] %s: canceled (intercepted by %v/%v)\n",
+					invocation.eid, invocation.cid, invocation.action.Name, newInv.eid, newInv.cid)
+				invocation.done <- InvocationResult{
+					exitCode:   0,
+					invocation: invocation,
+				}
+				return
 			}
-			return
 		}
 	}
 	// Action
-	log.Printf("(%v) [info] Executing %s ...\n", invocation.cid, action.Run)
+	log.Printf("(%v/%v) [info] Executing %s ...\n", invocation.eid, invocation.cid, invocation.action.Run)
 	exe := invocation.conf.Shell[0]
-	cmd := exec.Command(exe, append(invocation.conf.Shell[1:], action.Run)...)
+	cmd := exec.Command(exe, append(invocation.conf.Shell[1:], invocation.action.Run)...)
 	cmd.Env = append(os.Environ(),
 		"WEV_EVENT="+invocation.event.Op.String(),
 		"WEV_PATH="+invocation.event.Name)
 	err := cmd.Run()
-	if err != nil {
-		log.Printf("(%v) [error] failed to execute '%v'\n", invocation.cid, action.Run)
+	switch e := err.(type) {
+	case *exec.ExitError: // exit with non-zero status
+		status := e.Sys().(syscall.WaitStatus)
+		log.Printf("(%v/%v) [warn] exit with non-zero status %d: %s\n", invocation.eid, invocation.cid, status, invocation.action.Run)
+	case nil:
+	default:
+		log.Printf("(%v/%v) [error] failed to execute '%v'\n", invocation.eid, invocation.cid, invocation.action.Run)
 		invocation.done <- InvocationResult{
 			exitCode:   22,
 			invocation: invocation,
@@ -196,10 +192,11 @@ func poll(watcher *fsnotify.Watcher, conf *config.Config, exitAll chan<- int) {
 }
 
 type Invocation struct {
+	eid           EID
 	cid           CID
 	conf          *config.Config
 	event         *fsnotify.Event
-	actionName    string
+	action        *config.Action
 	newInvocation chan Invocation
 	done          chan InvocationResult
 }
@@ -212,14 +209,22 @@ type InvocationResult struct {
 var runningMutex sync.RWMutex = sync.RWMutex{}
 var runningInvocations []Invocation
 
-func NewInvocation(cid CID, conf *config.Config, event *fsnotify.Event, actionName string, exitAll chan<- int) Invocation {
+func NewInvocation(
+	eid EID,
+	cid CID,
+	conf *config.Config,
+	event *fsnotify.Event,
+	action *config.Action,
+	exitAll chan<- int) Invocation {
+
 	done := make(chan InvocationResult)
 	go func() {
 		result := <-done
 		// Delete matched invocation in runningInvocations
 		runningMutex.Lock()
 		for i, invocation := range runningInvocations {
-			if result.invocation.cid == invocation.cid {
+			if result.invocation.eid == invocation.eid &&
+				result.invocation.cid == invocation.cid {
 				// Delete runningInvocations[i]
 				runningInvocations = append(runningInvocations[:i], runningInvocations[i+1:]...)
 				break
@@ -233,26 +238,27 @@ func NewInvocation(cid CID, conf *config.Config, event *fsnotify.Event, actionNa
 	}()
 
 	return Invocation{
+		eid:           eid,
 		cid:           cid,
 		conf:          conf,
 		event:         event,
-		actionName:    actionName,
+		action:        action,
 		newInvocation: make(chan Invocation),
 		done:          done,
 	}
 }
 
 func handleEvent(event *fsnotify.Event, watcher *fsnotify.Watcher, conf *config.Config, exitAll chan<- int) {
-	var actionName string
-	cid := makeCommandID()
+	eid := makeEventID()
+	var actions []*config.Action
 
 	switch {
 	case event.Op&fsnotify.Write == fsnotify.Write:
-		log.Printf("(%v) [info] Modified file: %s\n", cid, event.Name)
-		actionName = conf.OnWrite
+		log.Printf("(%v) [info] Modified file: %s\n", eid, event.Name)
+		actions = conf.GetActionsOn("write")
 
 	case event.Op&fsnotify.Create == fsnotify.Create:
-		log.Printf("(%v) [info] Created file: %s\n", cid, event.Name)
+		log.Printf("(%v) [info] Created file: %s\n", eid, event.Name)
 		// Watch a new directory
 		if file, err := os.Stat(event.Name); err == nil && file.IsDir() {
 			err = watchRecursively(event.Name, watcher)
@@ -261,30 +267,32 @@ func handleEvent(event *fsnotify.Event, watcher *fsnotify.Watcher, conf *config.
 				exitAll <- 10
 			}
 		}
-		actionName = conf.OnCreate
+		actions = conf.GetActionsOn("create")
 
 	case event.Op&fsnotify.Remove == fsnotify.Remove:
-		log.Printf("(%v) [info] Removed file: %s\n", cid, event.Name)
-		actionName = conf.OnRemove
+		log.Printf("(%v) [info] Removed file: %s\n", eid, event.Name)
+		actions = conf.GetActionsOn("remove")
 
 	case event.Op&fsnotify.Rename == fsnotify.Rename:
-		log.Printf("(%v) [info] Renamed file: %s\n", cid, event.Name)
-		actionName = conf.OnRename
+		log.Printf("(%v) [info] Renamed file: %s\n", eid, event.Name)
+		actions = conf.GetActionsOn("rename")
 
 	case event.Op&fsnotify.Chmod == fsnotify.Chmod:
-		log.Printf("(%v) [info] File changed permission: %s\n", cid, event.Name)
-		actionName = conf.OnChmod
+		log.Printf("(%v) [info] File changed permission: %s\n", eid, event.Name)
+		actions = conf.GetActionsOn("chmod")
 	}
 
-	if actionName != "" {
-		invocation := NewInvocation(cid, conf, event, actionName, exitAll)
+	for i, action := range actions {
+		cid := CID(i + 1)
+		invocation := NewInvocation(eid, cid, conf, event, action, exitAll)
 		notifyNewInvocation(invocation)
 
 		runningMutex.Lock()
 		runningInvocations = append(runningInvocations, invocation)
 		runningMutex.Unlock()
 
-		invokeAction(invocation)
+		log.Printf("(%v/%v) invoking %s ...", invocation.eid, invocation.cid, invocation.action.Name)
+		go invokeAction(invocation)
 	}
 }
 
@@ -299,14 +307,16 @@ func notifyNewInvocation(newInv Invocation) {
 	}
 }
 
-type CID float64
+type EID int64
 
-var currentCID CID
+var currentEID EID
 
-func makeCommandID() CID {
-	currentCID += 1
-	return currentCID
+func makeEventID() EID {
+	currentEID += 1
+	return currentEID
 }
+
+type CID int
 
 func watchRecursively(root string, watcher *fsnotify.Watcher) error {
 	err := watcher.Add(root)
