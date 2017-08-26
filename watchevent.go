@@ -110,6 +110,7 @@ func (task *Task) invoke() {
 	task.execute()
 }
 
+// Returns true if task.execute() can be called
 func (task *Task) sleep(msec int64) bool {
 	log.Printf("(%v/%v) [info] Sleeping %s ...", task.eid, task.cid, task.action.Interval)
 	timeout := time.After(time.Duration(msec) * time.Millisecond)
@@ -141,10 +142,6 @@ func (task *Task) sleep(msec int64) bool {
 			log.Printf("(%v/%v) [info] %s: retried (intercepted by %v/%v)\n",
 				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
 			task.invoke()
-			task.done <- TaskResult{
-				exitCode: 0,
-				task:     task,
-			}
 		} else if intervalAction == config.Cancel {
 			log.Printf("(%v/%v) [info] %s: canceled (intercepted by %v/%v)\n",
 				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
