@@ -2,9 +2,10 @@
 NAME := watchevent
 SRC := *.go
 VERSION := $(shell git describe --tags)
-LDFLAGS := -X main.version=$(VERSION) -extldflags '-static'
+RELEASE_LDFLAGS := $(DEVEL_LDFLAGS) -extldflags '-static'
+DEVEL_LDFLAGS := -X main.version=$(VERSION)
 
-all: $(NAME)
+all: devel
 
 setup:
 	go get github.com/Masterminds/glide
@@ -15,7 +16,11 @@ deps: setup
 update: setup
 	glide update
 
-$(NAME): $(SRC)
-	go build -tags netgo -installsuffix netgo -ldflags "$(LDFLAGS)" -o bin/$(NAME)
+# Make static-liked binary (slow)
+release: $(SRC)
+	go build -tags netgo -installsuffix netgo -ldflags "$(RELEASE_LDFLAGS)" -o bin/$(NAME)
 
-.PHONY: setup deps update
+devel: $(SRC)
+	go build -ldflags "$(DEVEL_LDFLAGS)" -o bin/$(NAME)
+
+.PHONY: all setup deps update release devel
