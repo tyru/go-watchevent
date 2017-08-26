@@ -9,8 +9,8 @@ action:
     # 15s after latest file change, access to Subsonic API
     interval: 15s
     interval_action:
-      - on: ['self']
+      - on: ['create', 'remove']
         do: cancel
-      - on: ['!self']
+      - on: ['write', 'rename', 'chmod']
         do: retry
     run: curl http://localhost:4040/rest/startScan
