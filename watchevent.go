@@ -6,12 +6,8 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
-	"syscall"
-	"time"
 	"watchevent/config"
 
 	"github.com/go-fsnotify/fsnotify"
@@ -101,91 +97,12 @@ func (dir *Directories) Set(value string) error {
 	return nil
 }
 
-// FIXME: race condition of task.newTask
-func (task *Task) invoke() {
-	msec := config.MustParseIntervalMSec(task.action.Interval)
-	if msec > 0 && !task.sleep(msec) {
-		return
-	}
-	task.execute()
-}
-
-// Returns true if task.execute() can be called
-func (task *Task) sleep(msec int64) bool {
-	log.Printf("(%v/%v) [info] Sleeping %s ...", task.eid, task.cid, task.action.Interval)
-	timeout := time.After(time.Duration(msec) * time.Millisecond)
-	select {
-	case <-timeout:
-		// Execute action
-		return true
-	case newInv := <-task.newTask:
-		selfOp := task.event.Op
-		newOp := newInv.event.Op
-		intervalAction, err := task.action.DetermineIntervalAction(selfOp, newOp, config.Ignore)
-		if err != nil {
-			log.Println(err)
-			log.Printf("(%v/%v) [error] failed to execute '%v'\n", task.eid, task.cid, task.action.Run)
-			task.done <- TaskResult{
-				exitCode: 21,
-				task:     task,
-			}
-		}
-		if intervalAction == config.Ignore {
-			log.Printf("(%v/%v) [info] %s: ignored (intercepted by %v/%v)\n",
-				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
-			select {
-			case <-timeout:
-			}
-			// Execute action
-			return true
-		} else if intervalAction == config.Retry {
-			log.Printf("(%v/%v) [info] %s: retried (intercepted by %v/%v)\n",
-				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
-			task.invoke()
-		} else if intervalAction == config.Cancel {
-			log.Printf("(%v/%v) [info] %s: canceled (intercepted by %v/%v)\n",
-				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
-			task.done <- TaskResult{
-				exitCode: 0,
-				task:     task,
-			}
-		}
-	}
-	return false
-}
-
-func (task *Task) execute() {
-	log.Printf("(%v/%v) [info] Executing %s ...\n", task.eid, task.cid, task.action.Run)
-	exe := task.conf.Shell[0]
-	cmd := exec.Command(exe, append(task.conf.Shell[1:], task.action.Run)...)
-	cmd.Env = append(os.Environ(),
-		"WEV_EVENT="+task.event.Op.String(),
-		"WEV_PATH="+task.event.Name)
-	err := cmd.Run()
-	switch e := err.(type) {
-	case *exec.ExitError: // exit with non-zero status
-		status := e.Sys().(syscall.WaitStatus)
-		log.Printf("(%v/%v) [warn] exit with non-zero status %d: %s\n", task.eid, task.cid, status, task.action.Run)
-	case nil:
-	default:
-		log.Printf("(%v/%v) [error] failed to execute '%v'\n", task.eid, task.cid, task.action.Run)
-		task.done <- TaskResult{
-			exitCode: 22,
-			task:     task,
-		}
-		return
-	}
-	task.done <- TaskResult{
-		exitCode: 0,
-		task:     task,
-	}
-}
-
 func poll(watcher *fsnotify.Watcher, conf *config.Config, exitAll chan<- int) {
+	coodinator := NewTaskCoodinator()
 	for {
 		select {
 		case event := <-watcher.Events:
-			handleEvent(&event, watcher, conf, exitAll)
+			handleEvent(&event, watcher, conf, coodinator, exitAll)
 
 		case err := <-watcher.Errors:
 			log.Println("error: ", err)
@@ -194,64 +111,13 @@ func poll(watcher *fsnotify.Watcher, conf *config.Config, exitAll chan<- int) {
 	}
 }
 
-type Task struct {
-	eid     EID
-	cid     CID
-	conf    *config.Config
-	event   *fsnotify.Event
-	action  *config.Action
-	newTask chan Task
-	done    chan TaskResult
-}
-
-type TaskResult struct {
-	exitCode int
-	task     *Task
-}
-
-var runningMutex sync.RWMutex = sync.RWMutex{}
-var runningTasks []Task
-
-func NewTask(
-	eid EID,
-	cid CID,
-	conf *config.Config,
+func handleEvent(
 	event *fsnotify.Event,
-	action *config.Action,
-	exitAll chan<- int) Task {
-
-	done := make(chan TaskResult)
-	go func() {
-		result := <-done
-		// Delete matched task in runningTasks
-		runningMutex.Lock()
-		for i, task := range runningTasks {
-			if result.task.eid == task.eid &&
-				result.task.cid == task.cid {
-				// Delete runningTasks[i]
-				runningTasks = append(runningTasks[:i], runningTasks[i+1:]...)
-				break
-			}
-		}
-		runningMutex.Unlock()
-		// Exit program when exitCode is non-zero
-		if result.exitCode != 0 {
-			exitAll <- result.exitCode
-		}
-	}()
-
-	return Task{
-		eid:     eid,
-		cid:     cid,
-		conf:    conf,
-		event:   event,
-		action:  action,
-		newTask: make(chan Task),
-		done:    done,
-	}
-}
-
-func handleEvent(event *fsnotify.Event, watcher *fsnotify.Watcher, conf *config.Config, exitAll chan<- int) {
+	watcher *fsnotify.Watcher,
+	conf *config.Config,
+	coodinator *TaskCoodinator,
+	exitAll chan<- int,
+) {
 	eid := makeEventID()
 	var actions []*config.Action
 
@@ -287,26 +153,14 @@ func handleEvent(event *fsnotify.Event, watcher *fsnotify.Watcher, conf *config.
 
 	for i, action := range actions {
 		cid := CID(i + 1)
-		task := NewTask(eid, cid, conf, event, action, exitAll)
-		notifyNewTask(task)
-
-		runningMutex.Lock()
-		runningTasks = append(runningTasks, task)
-		runningMutex.Unlock()
+		task := coodinator.NewTask(
+			eid, cid, conf, event, action, exitAll,
+		)
+		coodinator.notifyNewTask(&task)
+		coodinator.addTask(&task)
 
 		log.Printf("(%v/%v) invoking %s ...", task.eid, task.cid, task.action.Name)
 		go task.invoke()
-	}
-}
-
-func notifyNewTask(newInv Task) {
-	runningMutex.RLock()
-	defer runningMutex.RUnlock()
-	for _, task := range runningTasks {
-		select {
-		case task.newTask <- newInv:
-		default:
-		}
 	}
 }
 
