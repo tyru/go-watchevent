@@ -76,7 +76,8 @@ func validateActionConfig(action *Action) error {
 	}
 
 	for i, on := range action.On {
-		if on != "write" &&
+		if on != "all" &&
+			on != "write" &&
 			on != "create" &&
 			on != "remove" &&
 			on != "rename" &&
@@ -248,7 +249,7 @@ func (config *Config) GetActionsOn(target string) []*Action {
 	for i := range config.Action {
 		action := &config.Action[i]
 		for _, on := range action.On {
-			if on == target {
+			if on == "all" || on == target {
 				actions = append(actions, action)
 				break
 			}

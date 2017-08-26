@@ -1,11 +1,6 @@
 action:
   - name: write-logs
-    on:
-      - write
-      - create
-      - remove
-      - rename
-      - chmod
+    on: [all]
     run: echo $(date) $WEV_EVENT $WEV_PATH >>log.txt
   - name: post-libresonic-rescan
     on:
