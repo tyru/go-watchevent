@@ -101,80 +101,80 @@ func (dir *Directories) Set(value string) error {
 	return nil
 }
 
-// FIXME: race condition of invocation.newInvocation
-func invokeAction(invocation Invocation) {
+// FIXME: race condition of task.newTask
+func invokeTask(task Task) {
 	// Sleep
-	msec := config.MustParseIntervalMSec(invocation.action.Interval)
+	msec := config.MustParseIntervalMSec(task.action.Interval)
 	if msec > 0 {
-		log.Printf("(%v/%v) [info] Sleeping %s ...", invocation.eid, invocation.cid, invocation.action.Interval)
+		log.Printf("(%v/%v) [info] Sleeping %s ...", task.eid, task.cid, task.action.Interval)
 		timeout := time.After(time.Duration(msec) * time.Millisecond)
 		select {
 		case <-timeout:
 			// Execute action
-		case newInv := <-invocation.newInvocation:
-			selfOp := invocation.event.Op
+		case newInv := <-task.newTask:
+			selfOp := task.event.Op
 			newOp := newInv.event.Op
-			intervalAction, err := invocation.action.DetermineIntervalAction(selfOp, newOp, config.Ignore)
+			intervalAction, err := task.action.DetermineIntervalAction(selfOp, newOp, config.Ignore)
 			if err != nil {
 				log.Println(err)
-				log.Printf("(%v/%v) [error] failed to execute '%v'\n", invocation.eid, invocation.cid, invocation.action.Run)
-				invocation.done <- InvocationResult{
-					exitCode:   21,
-					invocation: invocation,
+				log.Printf("(%v/%v) [error] failed to execute '%v'\n", task.eid, task.cid, task.action.Run)
+				task.done <- TaskResult{
+					exitCode: 21,
+					task:     task,
 				}
 				return
 			}
 			if intervalAction == config.Ignore {
 				log.Printf("(%v/%v) [info] %s: ignored (intercepted by %v/%v)\n",
-					invocation.eid, invocation.cid, invocation.action.Name, newInv.eid, newInv.cid)
+					task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
 				select {
 				case <-timeout:
 				}
 				// Execute action
 			} else if intervalAction == config.Retry {
 				log.Printf("(%v/%v) [info] %s: retried (intercepted by %v/%v)\n",
-					invocation.eid, invocation.cid, invocation.action.Name, newInv.eid, newInv.cid)
-				invokeAction(invocation)
-				invocation.done <- InvocationResult{
-					exitCode:   0,
-					invocation: invocation,
+					task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
+				invokeTask(task)
+				task.done <- TaskResult{
+					exitCode: 0,
+					task:     task,
 				}
 				return
 			} else if intervalAction == config.Cancel {
 				log.Printf("(%v/%v) [info] %s: canceled (intercepted by %v/%v)\n",
-					invocation.eid, invocation.cid, invocation.action.Name, newInv.eid, newInv.cid)
-				invocation.done <- InvocationResult{
-					exitCode:   0,
-					invocation: invocation,
+					task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
+				task.done <- TaskResult{
+					exitCode: 0,
+					task:     task,
 				}
 				return
 			}
 		}
 	}
 	// Action
-	log.Printf("(%v/%v) [info] Executing %s ...\n", invocation.eid, invocation.cid, invocation.action.Run)
-	exe := invocation.conf.Shell[0]
-	cmd := exec.Command(exe, append(invocation.conf.Shell[1:], invocation.action.Run)...)
+	log.Printf("(%v/%v) [info] Executing %s ...\n", task.eid, task.cid, task.action.Run)
+	exe := task.conf.Shell[0]
+	cmd := exec.Command(exe, append(task.conf.Shell[1:], task.action.Run)...)
 	cmd.Env = append(os.Environ(),
-		"WEV_EVENT="+invocation.event.Op.String(),
-		"WEV_PATH="+invocation.event.Name)
+		"WEV_EVENT="+task.event.Op.String(),
+		"WEV_PATH="+task.event.Name)
 	err := cmd.Run()
 	switch e := err.(type) {
 	case *exec.ExitError: // exit with non-zero status
 		status := e.Sys().(syscall.WaitStatus)
-		log.Printf("(%v/%v) [warn] exit with non-zero status %d: %s\n", invocation.eid, invocation.cid, status, invocation.action.Run)
+		log.Printf("(%v/%v) [warn] exit with non-zero status %d: %s\n", task.eid, task.cid, status, task.action.Run)
 	case nil:
 	default:
-		log.Printf("(%v/%v) [error] failed to execute '%v'\n", invocation.eid, invocation.cid, invocation.action.Run)
-		invocation.done <- InvocationResult{
-			exitCode:   22,
-			invocation: invocation,
+		log.Printf("(%v/%v) [error] failed to execute '%v'\n", task.eid, task.cid, task.action.Run)
+		task.done <- TaskResult{
+			exitCode: 22,
+			task:     task,
 		}
 		return
 	}
-	invocation.done <- InvocationResult{
-		exitCode:   0,
-		invocation: invocation,
+	task.done <- TaskResult{
+		exitCode: 0,
+		task:     task,
 	}
 }
 
@@ -191,42 +191,42 @@ func poll(watcher *fsnotify.Watcher, conf *config.Config, exitAll chan<- int) {
 	}
 }
 
-type Invocation struct {
-	eid           EID
-	cid           CID
-	conf          *config.Config
-	event         *fsnotify.Event
-	action        *config.Action
-	newInvocation chan Invocation
-	done          chan InvocationResult
+type Task struct {
+	eid     EID
+	cid     CID
+	conf    *config.Config
+	event   *fsnotify.Event
+	action  *config.Action
+	newTask chan Task
+	done    chan TaskResult
 }
 
-type InvocationResult struct {
-	exitCode   int
-	invocation Invocation
+type TaskResult struct {
+	exitCode int
+	task     Task
 }
 
 var runningMutex sync.RWMutex = sync.RWMutex{}
-var runningInvocations []Invocation
+var runningTasks []Task
 
-func NewInvocation(
+func NewTask(
 	eid EID,
 	cid CID,
 	conf *config.Config,
 	event *fsnotify.Event,
 	action *config.Action,
-	exitAll chan<- int) Invocation {
+	exitAll chan<- int) Task {
 
-	done := make(chan InvocationResult)
+	done := make(chan TaskResult)
 	go func() {
 		result := <-done
-		// Delete matched invocation in runningInvocations
+		// Delete matched task in runningTasks
 		runningMutex.Lock()
-		for i, invocation := range runningInvocations {
-			if result.invocation.eid == invocation.eid &&
-				result.invocation.cid == invocation.cid {
-				// Delete runningInvocations[i]
-				runningInvocations = append(runningInvocations[:i], runningInvocations[i+1:]...)
+		for i, task := range runningTasks {
+			if result.task.eid == task.eid &&
+				result.task.cid == task.cid {
+				// Delete runningTasks[i]
+				runningTasks = append(runningTasks[:i], runningTasks[i+1:]...)
 				break
 			}
 		}
@@ -237,14 +237,14 @@ func NewInvocation(
 		}
 	}()
 
-	return Invocation{
-		eid:           eid,
-		cid:           cid,
-		conf:          conf,
-		event:         event,
-		action:        action,
-		newInvocation: make(chan Invocation),
-		done:          done,
+	return Task{
+		eid:     eid,
+		cid:     cid,
+		conf:    conf,
+		event:   event,
+		action:  action,
+		newTask: make(chan Task),
+		done:    done,
 	}
 }
 
@@ -284,24 +284,24 @@ func handleEvent(event *fsnotify.Event, watcher *fsnotify.Watcher, conf *config.
 
 	for i, action := range actions {
 		cid := CID(i + 1)
-		invocation := NewInvocation(eid, cid, conf, event, action, exitAll)
-		notifyNewInvocation(invocation)
+		task := NewTask(eid, cid, conf, event, action, exitAll)
+		notifyNewTask(task)
 
 		runningMutex.Lock()
-		runningInvocations = append(runningInvocations, invocation)
+		runningTasks = append(runningTasks, task)
 		runningMutex.Unlock()
 
-		log.Printf("(%v/%v) invoking %s ...", invocation.eid, invocation.cid, invocation.action.Name)
-		go invokeAction(invocation)
+		log.Printf("(%v/%v) invoking %s ...", task.eid, task.cid, task.action.Name)
+		go invokeTask(task)
 	}
 }
 
-func notifyNewInvocation(newInv Invocation) {
+func notifyNewTask(newInv Task) {
 	runningMutex.RLock()
 	defer runningMutex.RUnlock()
-	for _, invocation := range runningInvocations {
+	for _, task := range runningTasks {
 		select {
-		case invocation.newInvocation <- newInv:
+		case task.newTask <- newInv:
 		default:
 		}
 	}
