@@ -102,56 +102,62 @@ func (dir *Directories) Set(value string) error {
 }
 
 // FIXME: race condition of task.newTask
-func invokeTask(task Task) {
-	// Sleep
+func (task *Task) invoke() {
 	msec := config.MustParseIntervalMSec(task.action.Interval)
-	if msec > 0 {
-		log.Printf("(%v/%v) [info] Sleeping %s ...", task.eid, task.cid, task.action.Interval)
-		timeout := time.After(time.Duration(msec) * time.Millisecond)
-		select {
-		case <-timeout:
-			// Execute action
-		case newInv := <-task.newTask:
-			selfOp := task.event.Op
-			newOp := newInv.event.Op
-			intervalAction, err := task.action.DetermineIntervalAction(selfOp, newOp, config.Ignore)
-			if err != nil {
-				log.Println(err)
-				log.Printf("(%v/%v) [error] failed to execute '%v'\n", task.eid, task.cid, task.action.Run)
-				task.done <- TaskResult{
-					exitCode: 21,
-					task:     task,
-				}
-				return
+	if msec > 0 && !task.sleep(msec) {
+		return
+	}
+	task.execute()
+}
+
+func (task *Task) sleep(msec int64) bool {
+	log.Printf("(%v/%v) [info] Sleeping %s ...", task.eid, task.cid, task.action.Interval)
+	timeout := time.After(time.Duration(msec) * time.Millisecond)
+	select {
+	case <-timeout:
+		// Execute action
+		return true
+	case newInv := <-task.newTask:
+		selfOp := task.event.Op
+		newOp := newInv.event.Op
+		intervalAction, err := task.action.DetermineIntervalAction(selfOp, newOp, config.Ignore)
+		if err != nil {
+			log.Println(err)
+			log.Printf("(%v/%v) [error] failed to execute '%v'\n", task.eid, task.cid, task.action.Run)
+			task.done <- TaskResult{
+				exitCode: 21,
+				task:     task,
 			}
-			if intervalAction == config.Ignore {
-				log.Printf("(%v/%v) [info] %s: ignored (intercepted by %v/%v)\n",
-					task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
-				select {
-				case <-timeout:
-				}
-				// Execute action
-			} else if intervalAction == config.Retry {
-				log.Printf("(%v/%v) [info] %s: retried (intercepted by %v/%v)\n",
-					task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
-				invokeTask(task)
-				task.done <- TaskResult{
-					exitCode: 0,
-					task:     task,
-				}
-				return
-			} else if intervalAction == config.Cancel {
-				log.Printf("(%v/%v) [info] %s: canceled (intercepted by %v/%v)\n",
-					task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
-				task.done <- TaskResult{
-					exitCode: 0,
-					task:     task,
-				}
-				return
+		}
+		if intervalAction == config.Ignore {
+			log.Printf("(%v/%v) [info] %s: ignored (intercepted by %v/%v)\n",
+				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
+			select {
+			case <-timeout:
+			}
+			// Execute action
+			return true
+		} else if intervalAction == config.Retry {
+			log.Printf("(%v/%v) [info] %s: retried (intercepted by %v/%v)\n",
+				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
+			task.invoke()
+			task.done <- TaskResult{
+				exitCode: 0,
+				task:     task,
+			}
+		} else if intervalAction == config.Cancel {
+			log.Printf("(%v/%v) [info] %s: canceled (intercepted by %v/%v)\n",
+				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
+			task.done <- TaskResult{
+				exitCode: 0,
+				task:     task,
 			}
 		}
 	}
-	// Action
+	return false
+}
+
+func (task *Task) execute() {
 	log.Printf("(%v/%v) [info] Executing %s ...\n", task.eid, task.cid, task.action.Run)
 	exe := task.conf.Shell[0]
 	cmd := exec.Command(exe, append(task.conf.Shell[1:], task.action.Run)...)
@@ -203,7 +209,7 @@ type Task struct {
 
 type TaskResult struct {
 	exitCode int
-	task     Task
+	task     *Task
 }
 
 var runningMutex sync.RWMutex = sync.RWMutex{}
@@ -292,7 +298,7 @@ func handleEvent(event *fsnotify.Event, watcher *fsnotify.Watcher, conf *config.
 		runningMutex.Unlock()
 
 		log.Printf("(%v/%v) invoking %s ...", task.eid, task.cid, task.action.Name)
-		go invokeTask(task)
+		go task.invoke()
 	}
 }
 
