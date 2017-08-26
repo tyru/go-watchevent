@@ -159,8 +159,8 @@ func handleEvent(
 		coodinator.addTask(&task)
 
 		log.Printf("(%v/%v) invoking %s ...", task.eid, task.cid, task.action.Name)
-		go task.invoke()
-		<-task.started
+		started := task.invoke()
+		<-started
 	}
 }
 

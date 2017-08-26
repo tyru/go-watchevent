@@ -77,7 +77,6 @@ func (coodinator *TaskCoodinator) NewTask(
 		conf:          conf,
 		event:         event,
 		action:        action,
-		started:       make(chan bool, 1), // cap=1 to avoid deadlock
 		newTaskEvents: make(chan *Task),
 		done:          done,
 	}
@@ -89,7 +88,6 @@ type Task struct {
 	conf          *Config
 	event         *fsnotify.Event
 	action        *Action
-	started       chan bool
 	newTaskEvents chan *Task
 	done          chan *TaskResult
 }
@@ -100,23 +98,27 @@ type TaskResult struct {
 }
 
 // FIXME: race condition of task.newTaskEvents
-func (task *Task) invoke() {
+func (task *Task) invoke() <-chan bool {
+	started := make(chan bool, 1) // cap=1 to avoid deadlock
 	msec := MustParseIntervalMSec(task.action.Interval)
-	if !task.sleep(msec) {
-		return
-	}
-	task.execute()
+	go func() {
+		if !task.sleep(msec, started) {
+			return
+		}
+		task.execute()
+	}()
+	return started
 }
 
 // Returns true if task.execute() can be called
-func (task *Task) sleep(msec int64) bool {
+func (task *Task) sleep(msec int64, started chan<- bool) bool {
 	if msec <= 0 {
-		task.started <- true
+		started <- true
 		return true
 	}
 	log.Printf("(%v/%v) [info] Sleeping %s ...", task.eid, task.cid, task.action.Interval)
 	timeout := time.After(time.Duration(msec) * time.Millisecond)
-	task.started <- true
+	started <- true // start watching task.newTaskEvents
 	select {
 	case <-timeout:
 		// Execute action
