@@ -48,7 +48,7 @@ func (coodinator *TaskCoodinator) NewTask(
 	action *Action,
 	exitAll chan<- int,
 ) Task {
-	done := make(chan *TaskResult)
+	done := make(chan *TaskResult, 1)
 	go func() {
 		result := <-done
 		// Delete matched task in running tasks

@@ -64,7 +64,7 @@ Options
 	defer watcher.Close()
 
 	// Run watcher
-	exitAll := make(chan int)
+	exitAll := make(chan int, 1)
 	go poll(watcher, conf, exitAll)
 
 	// Watch the specified directory
