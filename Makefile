@@ -2,7 +2,7 @@
 NAME := watchevent
 SRC := *.go
 VERSION := $(shell git describe --tags)
-LDFLAGS := -X main.version=$(VERSION)
+LDFLAGS := -X main.version=$(VERSION) -extldflags '-static'
 
 all: $(NAME)
 
@@ -16,6 +16,6 @@ update: setup
 	glide update
 
 $(NAME): $(SRC)
-	go build -ldflags "$(LDFLAGS)" -o bin/$(NAME)
+	go build -tags netgo -installsuffix netgo -ldflags "$(LDFLAGS)" -o bin/$(NAME)
 
 .PHONY: setup deps update
