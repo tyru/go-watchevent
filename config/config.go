@@ -101,15 +101,15 @@ func validateActionConfig(action *Action) error {
 	return nil
 }
 
-var rxOn = regexp.MustCompile(`^!?(self|write|create|remove|rename|chmod)$`)
+var rxOn = regexp.MustCompile(`^!?(all|self|write|create|remove|rename|chmod)$`)
 
 func validateIntervalAction(intervalAction []IntervalAction) error {
 	for i, iaction := range intervalAction {
 		for j, on := range iaction.On {
 			if !rxOn.MatchString(on) {
 				return errors.New("'interval_action[" + strconv.Itoa(i) + "].on[" +
-					strconv.Itoa(j) + "]' is invalid value (either \"self\", \"write\", " +
-					"\"create\", \"remove\", \"rename\", \"chmod\")")
+					strconv.Itoa(j) + "]' is invalid value (either \"all\", " +
+					"\"self\", \"write\", \"create\", \"remove\", \"rename\", \"chmod\")")
 			}
 		}
 		if iaction.Do != "ignore" && iaction.Do != "cancel" && iaction.Do != "retry" {
@@ -179,23 +179,25 @@ func (action *Action) DetermineIntervalAction(
 	for _, iaction := range intervalAction {
 		for _, on := range iaction.On {
 			var invert bool
+			var isAll bool
 			var op fsnotify.Op
 			if strings.HasPrefix(on, "!") {
 				invert = true
 				var err error
-				op, err = convertEventNameToOp(on[1:], selfOp)
+				op, isAll, err = convertEventNameToOp(on[1:], selfOp)
 				if err != nil {
 					return Ignore, err
 				}
 			} else {
 				invert = false
 				var err error
-				op, err = convertEventNameToOp(on, selfOp)
+				op, isAll, err = convertEventNameToOp(on, selfOp)
 				if err != nil {
 					return Ignore, err
 				}
 			}
-			if !invert && op == newOp || invert && op != newOp {
+			if !invert && (isAll || op == newOp) ||
+				invert && (!isAll && op != newOp) {
 				do, err := parseActionDo(iaction.Do)
 				if err != nil {
 					return Ignore, err
@@ -207,23 +209,26 @@ func (action *Action) DetermineIntervalAction(
 	return elseValue, nil
 }
 
-func convertEventNameToOp(eventName string, selfOp fsnotify.Op) (fsnotify.Op, error) {
-	if eventName == "self" {
-		return selfOp, nil
+func convertEventNameToOp(eventName string, selfOp fsnotify.Op) (op fsnotify.Op, isAll bool, err error) {
+	if eventName == "all" {
+		isAll = true
+	} else if eventName == "self" {
+		op = selfOp
 	} else if eventName == "write" {
-		return fsnotify.Write, nil
+		op = fsnotify.Write
 	} else if eventName == "create" {
-		return fsnotify.Create, nil
+		op = fsnotify.Create
 	} else if eventName == "remove" {
-		return fsnotify.Remove, nil
+		op = fsnotify.Remove
 	} else if eventName == "rename" {
-		return fsnotify.Rename, nil
+		op = fsnotify.Rename
 	} else if eventName == "chmod" {
-		return fsnotify.Chmod, nil
+		op = fsnotify.Chmod
 	} else {
-		return fsnotify.Write, errors.New(
+		err = errors.New(
 			"Can't convert '" + eventName + "' to fsnotify.Op")
 	}
+	return
 }
 
 func parseActionDo(do string) (ActionType, error) {
