@@ -7,7 +7,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"watchevent/config"
 
 	"github.com/go-fsnotify/fsnotify"
 )
@@ -44,9 +43,9 @@ func (coodinator *TaskCoodinator) notifyNewTask(newInv *Task) {
 func (coodinator *TaskCoodinator) NewTask(
 	eid EID,
 	cid CID,
-	conf *config.Config,
+	conf *Config,
 	event *fsnotify.Event,
-	action *config.Action,
+	action *Action,
 	exitAll chan<- int,
 ) Task {
 	done := make(chan *TaskResult)
@@ -100,7 +99,7 @@ type TaskResult struct {
 
 // FIXME: race condition of task.newTaskEvents
 func (task *Task) invoke() {
-	msec := config.MustParseIntervalMSec(task.action.Interval)
+	msec := MustParseIntervalMSec(task.action.Interval)
 	if msec > 0 && !task.sleep(msec) {
 		return
 	}
@@ -118,7 +117,7 @@ func (task *Task) sleep(msec int64) bool {
 	case newInv := <-task.newTaskEvents:
 		selfOp := task.event.Op
 		newOp := newInv.event.Op
-		intervalAction, err := task.action.DetermineIntervalAction(selfOp, newOp, config.Ignore)
+		intervalAction, err := task.action.DetermineIntervalAction(selfOp, newOp, Ignore)
 		if err != nil {
 			log.Println(err)
 			log.Printf("(%v/%v) [error] failed to execute '%v'\n", task.eid, task.cid, task.action.Run)
@@ -127,7 +126,7 @@ func (task *Task) sleep(msec int64) bool {
 				task:     task,
 			}
 		}
-		if intervalAction == config.Ignore {
+		if intervalAction == Ignore {
 			log.Printf("(%v/%v) [info] %s: ignored (intercepted by %v/%v)\n",
 				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
 			select {
@@ -135,11 +134,11 @@ func (task *Task) sleep(msec int64) bool {
 			}
 			// Execute action
 			return true
-		} else if intervalAction == config.Retry {
+		} else if intervalAction == Retry {
 			log.Printf("(%v/%v) [info] %s: retried (intercepted by %v/%v)\n",
 				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
 			task.invoke()
-		} else if intervalAction == config.Cancel {
+		} else if intervalAction == Cancel {
 			log.Printf("(%v/%v) [info] %s: canceled (intercepted by %v/%v)\n",
 				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
 			task.done <- &TaskResult{

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"watchevent/config"
 
 	"github.com/go-fsnotify/fsnotify"
 )
@@ -51,7 +50,7 @@ Options
 	}
 
 	// Load config
-	conf, err := config.LoadConfig(configFile)
+	conf, err := LoadConfig(configFile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[error]", configFile, ": Could not load config file:", err)
 		return 4
@@ -97,7 +96,7 @@ func (dir *Directories) Set(value string) error {
 	return nil
 }
 
-func poll(watcher *fsnotify.Watcher, conf *config.Config, exitAll chan<- int) {
+func poll(watcher *fsnotify.Watcher, conf *Config, exitAll chan<- int) {
 	coodinator := NewTaskCoodinator()
 	for {
 		select {
@@ -114,12 +113,12 @@ func poll(watcher *fsnotify.Watcher, conf *config.Config, exitAll chan<- int) {
 func handleEvent(
 	event *fsnotify.Event,
 	watcher *fsnotify.Watcher,
-	conf *config.Config,
+	conf *Config,
 	coodinator *TaskCoodinator,
 	exitAll chan<- int,
 ) {
 	eid := makeEventID()
-	var actions []*config.Action
+	var actions []*Action
 
 	switch {
 	case event.Op&fsnotify.Write == fsnotify.Write:
