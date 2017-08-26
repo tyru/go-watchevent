@@ -17,5 +17,5 @@ action:
       - on: ['self']
         do: cancel
       - on: ['!self']
-        do: retry
+        do: cancel
     run: curl http://localhost:4040/rest/startScan
