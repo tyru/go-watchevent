@@ -3,14 +3,10 @@ action:
     on: [all]
     run: echo $(date) $WEV_EVENT $WEV_PATH >>log.txt
   - name: post-libresonic-rescan
-    on:
-      - create
-      - remove
+    on: [all]
     # 15s after latest file change, access to Subsonic API
     interval: 15s
     interval_action:
-      - on: ['create', 'remove']
+      - on: ['all']
         do: cancel
-      - on: ['write', 'rename', 'chmod']
-        do: retry
     run: curl http://localhost:4040/rest/startScan
