@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/go-fsnotify/fsnotify"
@@ -21,10 +22,11 @@ func Main() int {
 
 	flag.Usage = func() {
 		name := filepath.Base(os.Args[0])
-		fmt.Fprintf(os.Stderr, `Usage of %s:
+		fmt.Fprintf(os.Stderr, `%s version %s %s/%s
+Usage:
    %s [OPTIONS]
 Options
-`, name, name)
+`, name, version, runtime.GOOS, runtime.GOARCH, name)
 		flag.PrintDefaults()
 	}
 
@@ -35,7 +37,16 @@ Options
 	var directories Directories
 	flag.Var(&directories, "directory", "directory to be watched")
 	flag.Var(&directories, "d", "directory to be watched")
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "show version")
 	flag.Parse()
+
+	if showVersion {
+		name := filepath.Base(os.Args[0])
+		fmt.Fprintf(os.Stderr, "%s version %s %s/%s\n",
+			name, version, runtime.GOOS, runtime.GOARCH)
+		return 8
+	}
 
 	if configFile == "" {
 		fmt.Fprintln(os.Stderr, "[error] -config option is required")
