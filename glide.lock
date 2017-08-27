@@ -1,8 +1,20 @@
-hash: 0fa9279a7e45a0be96fc010640e9dd3b243be6e5ed682642e74b22b5f9b290b2
-updated: 2017-08-23T08:46:35.0850049+09:00
+hash: f62ac608d8d6db50b3a164706022280d5bef64f8dac7a37cd74033bafb381596
+updated: 2017-08-27T17:26:59.7766019+09:00
 imports:
 - name: github.com/go-fsnotify/fsnotify
   version: 629574ca2a5df945712d3079857300b5e4da0236
+- name: go.uber.org/atomic
+  version: 4e336646b2ef9fc6e47be8e21594178f98e5ebcf
+- name: go.uber.org/multierr
+  version: 3c4937480c32f4c13a875a1829af76c98ca3d40a
+- name: go.uber.org/zap
+  version: 9d9d6135afe89b6fc4a05e9a8552526caba38048
+  subpackages:
+  - buffer
+  - internal/bufferpool
+  - internal/color
+  - internal/exit
+  - zapcore
 - name: golang.org/x/sys
   version: 07c182904dbd53199946ba614a412c61d3c548f5
   subpackages:

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -117,7 +116,7 @@ func (task *Task) sleep(msec int64, started chan<- bool) bool {
 		started <- true
 		return true
 	}
-	log.Printf("(%v/%v) [info] Sleeping %s ...", task.eid, task.cid, task.action.Interval)
+	Logger.Debugf("(%v/%v) Sleeping %s ...", task.eid, task.cid, task.action.Interval)
 	timeout := time.After(time.Duration(msec) * time.Millisecond)
 	started <- true // start watching task.newTaskEvents
 	select {
@@ -129,15 +128,15 @@ func (task *Task) sleep(msec int64, started chan<- bool) bool {
 		newOp := newInv.event.Op
 		intervalAction, err := task.action.DetermineIntervalAction(selfOp, newOp, Ignore)
 		if err != nil {
-			log.Println(err)
-			log.Printf("(%v/%v) [error] failed to execute '%v'\n", task.eid, task.cid, task.action.Run)
+			Logger.Error(err)
+			Logger.Errorf("(%v/%v) failed to execute '%v'\n", task.eid, task.cid, task.action.Run)
 			task.done <- &TaskResult{
 				exitCode: 21,
 				task:     task,
 			}
 		}
 		if intervalAction == Ignore {
-			log.Printf("(%v/%v) [info] %s: ignored (intercepted by %v/%v)\n",
+			Logger.Infof("(%v/%v) %s: ignored (intercepted by %v/%v)\n",
 				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
 			select {
 			case <-timeout:
@@ -145,11 +144,11 @@ func (task *Task) sleep(msec int64, started chan<- bool) bool {
 			// Execute action
 			return true
 		} else if intervalAction == Retry {
-			log.Printf("(%v/%v) [info] %s: retried (intercepted by %v/%v)\n",
+			Logger.Infof("(%v/%v) %s: retried (intercepted by %v/%v)\n",
 				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
 			task.invoke()
 		} else if intervalAction == Cancel {
-			log.Printf("(%v/%v) [info] %s: canceled (intercepted by %v/%v)\n",
+			Logger.Infof("(%v/%v) %s: canceled (intercepted by %v/%v)\n",
 				task.eid, task.cid, task.action.Name, newInv.eid, newInv.cid)
 			task.done <- &TaskResult{
 				exitCode: 0,
@@ -161,7 +160,7 @@ func (task *Task) sleep(msec int64, started chan<- bool) bool {
 }
 
 func (task *Task) execute() {
-	log.Printf("(%v/%v) [info] Executing %s ...\n", task.eid, task.cid, task.action.Run)
+	Logger.Infof("(%v/%v) Executing %s ...\n", task.eid, task.cid, task.action.Run)
 	exe := task.conf.Shell[0]
 	cmd := exec.Command(exe, append(task.conf.Shell[1:], task.action.Run)...)
 	cmd.Env = append(os.Environ(),
@@ -173,15 +172,15 @@ func (task *Task) execute() {
 		lines = strings.Split(string(out), "\n")
 	}
 	for _, line := range lines {
-		log.Printf("(%v/%v) [debug] out: %s\n", task.eid, task.cid, line)
+		Logger.Debugf("(%v/%v) [debug] out: %s\n", task.eid, task.cid, line)
 	}
 	switch e := err.(type) {
 	case *exec.ExitError: // exit with non-zero status
 		status := e.Sys().(syscall.WaitStatus)
-		log.Printf("(%v/%v) [warn] exit with non-zero status %d: %s\n", task.eid, task.cid, status, task.action.Run)
+		Logger.Warnf("(%v/%v) exit with non-zero status %d: %s\n", task.eid, task.cid, status, task.action.Run)
 	case nil:
 	default:
-		log.Printf("(%v/%v) [error] failed to execute '%v'\n", task.eid, task.cid, task.action.Run)
+		Logger.Errorf("(%v/%v) failed to execute '%v'\n", task.eid, task.cid, task.action.Run)
 		task.done <- &TaskResult{
 			exitCode: 22,
 			task:     task,

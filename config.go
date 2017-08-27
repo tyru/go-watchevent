@@ -9,12 +9,14 @@ import (
 	"strings"
 
 	"github.com/go-fsnotify/fsnotify"
+	"go.uber.org/zap"
 	yaml "gopkg.in/yaml.v2"
 )
 
 type Config struct {
 	Action []Action
 	Shell  []string
+	Log    zap.Config
 }
 
 type Action struct {
@@ -53,6 +55,12 @@ func LoadConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	logger, err := conf.Log.Build()
+	if err != nil {
+		return nil, err
+	}
+	Logger = logger.Sugar()
 
 	return &conf, nil
 }

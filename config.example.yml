@@ -10,3 +10,23 @@ action:
       - on: ['all']
         do: cancel
     run: curl http://localhost:4040/rest/startScan
+
+log:
+  level: "debug"
+  encoding: "console"
+  #encoding: "json"
+  encoderConfig:
+    messageKey: "msg"
+    levelKey: "level"
+    timeKey: "time"
+    nameKey: "name"
+    callerKey: "caller"
+    stacktraceKey: "stacktrace"
+    levelEncoder: "capital"
+    timeEncoder: "iso8601"
+    durationEncoder: "string"
+    callerEncoder: "short"
+  outputPaths:
+    - "stdout"
+  errorOutputPaths:
+    - "stderr"

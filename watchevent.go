@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,6 +81,7 @@ Options
 		}
 	}
 
+	Logger.Info("started.")
 	return <-exitAll
 }
 
@@ -104,7 +104,7 @@ func poll(watcher *fsnotify.Watcher, conf *Config, exitAll chan<- int) {
 			handleEvent(&event, watcher, conf, coodinator, exitAll)
 
 		case err := <-watcher.Errors:
-			log.Println("error: ", err)
+			Logger.Error(err)
 			exitAll <- 11
 		}
 	}
@@ -122,31 +122,31 @@ func handleEvent(
 
 	switch {
 	case event.Op&fsnotify.Write == fsnotify.Write:
-		log.Printf("(%v) [info] Modified file: %s\n", eid, event.Name)
+		Logger.Infof("(%v) Modified file: %s\n", eid, event.Name)
 		actions = conf.GetActionsOn("write")
 
 	case event.Op&fsnotify.Create == fsnotify.Create:
-		log.Printf("(%v) [info] Created file: %s\n", eid, event.Name)
+		Logger.Infof("(%v) Created file: %s\n", eid, event.Name)
 		// Watch a new directory
 		if file, err := os.Stat(event.Name); err == nil && file.IsDir() {
 			err = watchRecursively(event.Name, watcher)
 			if err != nil {
-				log.Fatal(err)
+				Logger.Error(err)
 				exitAll <- 10
 			}
 		}
 		actions = conf.GetActionsOn("create")
 
 	case event.Op&fsnotify.Remove == fsnotify.Remove:
-		log.Printf("(%v) [info] Removed file: %s\n", eid, event.Name)
+		Logger.Infof("(%v) Removed file: %s\n", eid, event.Name)
 		actions = conf.GetActionsOn("remove")
 
 	case event.Op&fsnotify.Rename == fsnotify.Rename:
-		log.Printf("(%v) [info] Renamed file: %s\n", eid, event.Name)
+		Logger.Infof("(%v) Renamed file: %s\n", eid, event.Name)
 		actions = conf.GetActionsOn("rename")
 
 	case event.Op&fsnotify.Chmod == fsnotify.Chmod:
-		log.Printf("(%v) [info] File changed permission: %s\n", eid, event.Name)
+		Logger.Infof("(%v) File changed permission: %s\n", eid, event.Name)
 		actions = conf.GetActionsOn("chmod")
 	}
 
@@ -158,7 +158,7 @@ func handleEvent(
 		coodinator.notifyNewTask(&task)
 		coodinator.addTask(&task)
 
-		log.Printf("(%v/%v) invoking %s ...", task.eid, task.cid, task.action.Name)
+		Logger.Debugf("(%v/%v) invoking %s ...", task.eid, task.cid, task.action.Name)
 		started := task.invoke()
 		<-started
 	}
@@ -180,7 +180,7 @@ func watchRecursively(root string, watcher *fsnotify.Watcher) error {
 	if err != nil {
 		return err
 	}
-	log.Println("Watched:", root)
+	Logger.Debug("Watched: " + root)
 
 	files, err := ioutil.ReadDir(root)
 	if err != nil {
