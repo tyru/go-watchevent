@@ -18,7 +18,7 @@ deps: setup
 update: setup
 	glide update
 
-# Make static-liked binary
+# Make static-linked binaries and tarballs
 release: $(SRC)
 	@for os in $(RELEASE_OS); do \
 		for arch in $(RELEASE_ARCH); do \
