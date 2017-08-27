@@ -1,17 +1,32 @@
+
+# Windows default
+#shell: ['cmd.exe', '/c']
+# Other OSes' default
+#shell: ['bash', '-c']
+
 action:
   - name: write-logs
+    # one of all, write, create, remove, rename, chmod
     on: [all]
+    # script passed to shell argument
     run: echo $(date) $WEV_EVENT $WEV_PATH >>log.txt
-  - name: post-libresonic-rescan
+  - name: post-subsonic-rescan
     on: [all]
-    # 15s after latest file change, access to Subsonic API
-    interval: 15s
+    # 30s after latest file change,
+    # access to Subsonic startScan API
+    interval: 30s
     interval_action:
+        # one of all, self, write, create, remove, rename, chmod
       - on: ['all']
+        # one of ignore, cancel, retry
         do: cancel
+    # see the below link about parameters
+    # http://www.subsonic.org/pages/api.jsp
     run: curl 'http://subsonic-server:4040/rest/startScan?u=user&t=token&s=salt&v=1.15.0&c=watchevent-curl'
 
 
+# zap logger's config (see zap document)
+# https://github.com/uber-go/zap
 log:
   level: "info"
   encoding: "console"
