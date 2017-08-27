@@ -9,7 +9,8 @@ action:
     interval_action:
       - on: ['all']
         do: cancel
-    run: curl http://localhost:4040/rest/startScan
+    run: curl 'http://subsonic-server:4040/rest/startScan?u=user&t=token&s=salt&v=1.15.0&c=watchevent-curl'
+
 
 log:
   level: "debug"
