@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -166,7 +167,14 @@ func (task *Task) execute() {
 	cmd.Env = append(os.Environ(),
 		"WEV_EVENT="+task.event.Op.String(),
 		"WEV_PATH="+task.event.Name)
-	err := cmd.Run()
+	out, err := cmd.Output()
+	var lines []string
+	if len(out) > 0 {
+		lines = strings.Split(string(out), "\n")
+	}
+	for _, line := range lines {
+		log.Printf("(%v/%v) [debug] out: %s\n", task.eid, task.cid, line)
+	}
 	switch e := err.(type) {
 	case *exec.ExitError: // exit with non-zero status
 		status := e.Sys().(syscall.WaitStatus)
